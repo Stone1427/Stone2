@@ -12,9 +12,6 @@ const pino = require('pino');
 const { Boom } = require('@hapi/boom');
 const readline = require('readline');
 const Groq = require('groq-sdk');
-const { exec } = require('child_process');
-const fs = require('fs');
-const path = require('path');
 
 const groq = new Groq({ apiKey: "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" });
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -23,29 +20,9 @@ const question = (text) => new Promise((resolve) => rl.question(text, resolve));
 // État global du bot
 let isBotActive = true;
 
-// Fonction pour télécharger une vidéo via yt-dlp
-async function downloadVideo(url) {
-    return new Promise((resolve, reject) => {
-        const filename = `video_${Date.now()}.mp4`;
-        const outputPath = path.join(__dirname, filename);
-        
-        // Commande yt-dlp pour télécharger la vidéo (format mp4, max 50MB pour WhatsApp)
-        // On utilise -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" pour garantir du MP4
-        const command = `yt-dlp -f "best[ext=mp4][filesize<50M]/best[filesize<50M]/best" -o "${outputPath}" "${url}"`;
-        
-        exec(command, (error, stdout, stderr) => {
-            if (error) {
-                console.error(`[DL ERROR] ${error.message}`);
-                return reject("Erreur lors du téléchargement. Le lien est peut-être invalide ou la vidéo trop lourde.");
-            }
-            if (fs.existsSync(outputPath)) {
-                resolve(outputPath);
-            } else {
-                reject("Fichier non trouvé après téléchargement.");
-            }
-        });
-    });
-}
+// Cache pour stocker temporairement les messages (pour l'anti-suppression)
+// On garde les 500 derniers messages en mémoire
+const messageDatabase = new Map();
 
 async function getGroqResponse(userMessage) {
     try {
@@ -53,7 +30,7 @@ async function getGroqResponse(userMessage) {
             messages: [
                 {
                     role: "system",
-                    content: `Tu es Stone 2, une intelligence artificielle avancée créée par Moussa Kamara. Tu es calme, respectueux et intelligent.`
+                    content: `Tu es Stone 2, une intelligence artificielle avancée créée par Moussa Kamara.`
                 },
                 { role: "user", content: userMessage }
             ],
@@ -94,54 +71,69 @@ async function startBot() {
         } else if (connection === 'open') { console.log('Bot Stone 2 connecté avec succès !'); }
     });
 
+    // --- LOGIQUE ANTI-SUPPRESSION (DÉTECTION) ---
+    sock.ev.on('messages.update', async (updates) => {
+        for (const update of updates) {
+            if (update.update.protocolMessage?.type === 0) { // Type 0 = Message supprimé
+                const deletedMsgId = update.update.protocolMessage.key.id;
+                const remoteJid = update.key.remoteJid;
+                
+                // On cherche le message original dans notre cache
+                const originalMsg = messageDatabase.get(deletedMsgId);
+                
+                if (originalMsg && isBotActive) {
+                    const participant = originalMsg.key.participant || originalMsg.key.remoteJid;
+                    const senderName = originalMsg.pushName || "Inconnu";
+                    
+                    await sock.sendMessage(remoteJid, { 
+                        text: `🛡️ *ANTI-SUPPRESSION DÉTECTÉ*\n\n👤 *Auteur :* ${senderName}\n📱 *Numéro :* @${participant.split('@')[0]}\n\n📜 *Message supprimé :*`,
+                        mentions: [participant]
+                    });
+
+                    // On renvoie le contenu original
+                    await sock.copyNForward(remoteJid, originalMsg, false);
+                    
+                    // Optionnel : supprimer du cache après récupération
+                    messageDatabase.delete(deletedMsgId);
+                }
+            }
+        }
+    });
+
     sock.ev.on('messages.upsert', async (m) => {
         const msg = m.messages[0];
         if (!msg.message) return;
 
         const remoteJid = msg.key.remoteJid;
         const isFromMe = msg.key.fromMe;
-        const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").trim();
-        const lowerText = text.toLowerCase();
+        const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").toLowerCase().trim();
 
-        // --- COMMANDES DE CONTRÔLE (PROPRIÉTAIRE UNIQUEMENT) ---
+        // --- STOCKAGE DANS LE CACHE (Pour l'anti-suppression) ---
+        if (msg.key.id) {
+            messageDatabase.set(msg.key.id, msg);
+            // Limiter la taille du cache pour éviter de saturer la RAM
+            if (messageDatabase.size > 500) {
+                const firstKey = messageDatabase.keys().next().value;
+                messageDatabase.delete(firstKey);
+            }
+        }
+
+        // --- COMMANDES DE CONTRÔLE (PROPRIÉTAIRE) ---
         if (isFromMe) {
-            if (lowerText === 'off') {
+            if (text === 'off') {
                 isBotActive = false;
-                await sock.sendMessage(remoteJid, { text: "Stone 2 est désactivé. 🛑" });
+                await sock.sendMessage(remoteJid, { text: "Stone 2 est désactivé (IA + Anti-Suppression). 🛑" });
                 return;
             }
-            if (lowerText === 'on') {
+            if (text === 'on') {
                 isBotActive = true;
                 await sock.sendMessage(remoteJid, { text: "Stone 2 est activé. ✅" });
                 return;
             }
         }
 
-        // --- TÉLÉCHARGEMENT DE MÉDIAS (TikTok, Instagram, YouTube) ---
-        const socialMediaRegex = /(https?:\/\/(?:www\.)?(?:tiktok\.com|instagram\.com|youtube\.com|youtu\.be)\/\S+)/i;
-        const match = text.match(socialMediaRegex);
-
-        if (match && isBotActive) {
-            const url = match[0];
-            await sock.sendMessage(remoteJid, { text: "⏳ Téléchargement de la vidéo en cours... Veuillez patienter." }, { quoted: msg });
-            
-            try {
-                const videoPath = await downloadVideo(url);
-                await sock.sendMessage(remoteJid, { 
-                    video: fs.readFileSync(videoPath), 
-                    caption: "Stone 2 : Voici votre vidéo ! 🎬" 
-                }, { quoted: msg });
-                
-                // Nettoyage du fichier temporaire
-                fs.unlinkSync(videoPath);
-            } catch (error) {
-                await sock.sendMessage(remoteJid, { text: `❌ ${error}` }, { quoted: msg });
-            }
-            return;
-        }
-
         // --- COMMANDE "VV" ---
-        if (lowerText === 'vv') {
+        if (text === 'vv') {
             const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
             if (!quoted) return sock.sendMessage(remoteJid, { text: "Répondez à un message à vue unique avec 'vv'." });
 
@@ -166,7 +158,7 @@ async function startBot() {
         }
 
         // --- RÉPONSE IA ---
-        if (!isFromMe && isBotActive && text && lowerText !== 'vv') {
+        if (!isFromMe && isBotActive && text && text !== 'vv') {
             const aiResponse = await getGroqResponse(text);
             await sock.sendMessage(remoteJid, { text: aiResponse });
         }
