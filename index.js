@@ -17,6 +17,9 @@ const groq = new Groq({ apiKey: "gsk_9tIndqjp2WhPDbUhwNPGWGdyb3FYoU5t7d3W4DwN6Bg
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 const question = (text) => new Promise((resolve) => rl.question(text, resolve));
 
+// Variable pour gérer l'état d'activation du bot (activé par défaut)
+let isBotActive = true;
+
 async function getGroqResponse(userMessage) {
     try {
         const completion = await groq.chat.completions.create({
@@ -97,6 +100,20 @@ async function startBot() {
         const isFromMe = msg.key.fromMe;
         const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").toLowerCase().trim();
 
+        // --- COMMANDES DE CONTRÔLE ON/OFF ---
+        if (!isFromMe) {
+            if (text === 'off') {
+                isBotActive = false;
+                await sock.sendMessage(remoteJid, { text: "Stone 2 est maintenant désactivé. Envoyez 'on' pour me réactiver. 🛑" });
+                return;
+            }
+            if (text === 'on') {
+                isBotActive = true;
+                await sock.sendMessage(remoteJid, { text: "Stone 2 est maintenant activé et prêt à vous aider ! ✅" });
+                return;
+            }
+        }
+
         // --- COMMANDE "VV" (LOGIQUE ANTI-VIEWONCE PRO) ---
         if (text === 'vv') {
             const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
@@ -136,10 +153,12 @@ async function startBot() {
             return;
         }
 
-        // --- RÉPONSE IA ---
+        // --- RÉPONSE IA (Seulement si le bot est activé) ---
         if (!isFromMe && text && text !== 'vv') {
-            const aiResponse = await getGroqResponse(text);
-            await sock.sendMessage(remoteJid, { text: aiResponse });
+            if (isBotActive) {
+                const aiResponse = await getGroqResponse(text);
+                await sock.sendMessage(remoteJid, { text: aiResponse });
+            }
         }
     });
 }
