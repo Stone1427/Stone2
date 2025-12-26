@@ -12,6 +12,7 @@ const pino = require('pino');
 const { Boom } = require('@hapi/boom');
 const readline = require('readline');
 const Groq = require('groq-sdk');
+const { Sticker } = require('wa-sticker-formatter'); // Nouvelle dépendance pour les stickers
 
 const groq = new Groq({ apiKey: "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" });
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -56,6 +57,66 @@ Aider les humains à évoluer grâce à la technologie, au savoir et à la créa
         });
         return completion.choices[0]?.message?.content || "Désolé, je n'ai pas pu générer de réponse.";
     } catch (error) { return "Désolé, mon cerveau d'IA est temporairement indisponible."; }
+}
+
+/**
+ * Converts a quoted image or video message into a WhatsApp sticker and sends it.
+ * @param {object} sock - The Baileys socket connection object.
+ * @param {object} msg - The incoming message object (m.messages[0]).
+ * @param {string} remoteJid - The JID of the chat.
+ */
+async function handleStickerConversion(sock, msg, remoteJid) {
+    const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+    const quotedMsgContext = msg.message?.extendedTextMessage?.contextInfo;
+
+    // 1. Check if it's a reply to a message
+    if (!quoted || !quotedMsgContext) {
+        return sock.sendMessage(remoteJid, { text: "Veuillez répondre à une image ou une vidéo avec la commande 'sticker' ou 's' pour la transformer en sticker." });
+    }
+
+    // 2. Check if the quoted message is an image or video
+    let quotedType = Object.keys(quoted)[0];
+    let mediaData = quoted[quotedType];
+
+    // Handle ViewOnce messages if they are quoted
+    if (quotedType === 'viewOnceMessageV2' || quotedType === 'viewOnceMessage') {
+        quotedType = Object.keys(quoted[quotedType].message)[0];
+        mediaData = quoted[Object.keys(quoted)[0]].message[quotedType];
+    }
+
+    const isImage = quotedType === 'imageMessage';
+    const isVideo = quotedType === 'videoMessage';
+
+    if (!isImage && !isVideo) {
+        return sock.sendMessage(remoteJid, { text: "Le message cité n'est pas une image ou une vidéo." });
+    }
+
+    try {
+        // 3. Download the media buffer
+        const mediaBuffer = await downloadMediaMessage(
+            { message: quoted, key: quotedMsgContext.stanzaId },
+            'buffer',
+            {},
+            { logger: sock.logger, reuploadRequest: sock.updateMediaMessage }
+        );
+
+        // 4. Create the sticker
+        const sticker = new Sticker(mediaBuffer, {
+            pack: 'Stone 2 Sticker Pack', // Sticker pack name
+            author: 'Moussa Kamara Bot', // Sticker author
+            type: isVideo ? 'animated' : 'full', // 'full' for static, 'animated' for video/gif
+            quality: 100,
+        });
+
+        const stickerBuffer = await sticker.build();
+
+        // 5. Send the sticker
+        await sock.sendMessage(remoteJid, { sticker: stickerBuffer }, { quoted: msg });
+
+    } catch (e) {
+        console.error("[STICKER ERROR]", e);
+        await sock.sendMessage(remoteJid, { text: "Erreur lors de la création du sticker. Assurez-vous que le fichier n'est pas trop volumineux (max 1MB pour les images, 100KB pour les vidéos)." });
+    }
 }
 
 async function startBot() {
@@ -136,8 +197,14 @@ async function startBot() {
             return;
         }
 
+        // --- COMMANDE "STICKER" ou "S" ---
+        if (text === 'sticker' || text === 's') {
+            await handleStickerConversion(sock, msg, remoteJid);
+            return;
+        }
+
         // --- RÉPONSE IA ---
-        if (!isFromMe && text && text !== 'vv') {
+        if (!isFromMe && text && text !== 'vv' && text !== 'sticker' && text !== 's') {
             const aiResponse = await getGroqResponse(text);
             await sock.sendMessage(remoteJid, { text: aiResponse });
         }
