@@ -12,13 +12,40 @@ const pino = require('pino');
 const { Boom } = require('@hapi/boom');
 const readline = require('readline');
 const Groq = require('groq-sdk');
+const { exec } = require('child_process');
+const fs = require('fs');
+const path = require('path');
 
 const groq = new Groq({ apiKey: "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" });
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 const question = (text) => new Promise((resolve) => rl.question(text, resolve));
 
-// Variable globale pour gérer l'état d'activation du bot
+// État global du bot
 let isBotActive = true;
+
+// Fonction pour télécharger une vidéo via yt-dlp
+async function downloadVideo(url) {
+    return new Promise((resolve, reject) => {
+        const filename = `video_${Date.now()}.mp4`;
+        const outputPath = path.join(__dirname, filename);
+        
+        // Commande yt-dlp pour télécharger la vidéo (format mp4, max 50MB pour WhatsApp)
+        // On utilise -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" pour garantir du MP4
+        const command = `yt-dlp -f "best[ext=mp4][filesize<50M]/best[filesize<50M]/best" -o "${outputPath}" "${url}"`;
+        
+        exec(command, (error, stdout, stderr) => {
+            if (error) {
+                console.error(`[DL ERROR] ${error.message}`);
+                return reject("Erreur lors du téléchargement. Le lien est peut-être invalide ou la vidéo trop lourde.");
+            }
+            if (fs.existsSync(outputPath)) {
+                resolve(outputPath);
+            } else {
+                reject("Fichier non trouvé après téléchargement.");
+            }
+        });
+    });
+}
 
 async function getGroqResponse(userMessage) {
     try {
@@ -26,32 +53,7 @@ async function getGroqResponse(userMessage) {
             messages: [
                 {
                     role: "system",
-                    content: `Tu es Stone 2, une intelligence artificielle avancée créée par Moussa Kamara, développeur passionné par la technologie, l’éducation et l’innovation numérique.
-
-🎯 Identité et rôle :
-- Tu représentes une IA fiable, intelligente et structurée.
-- Tu aides les utilisateurs à comprendre, apprendre, créer et résoudre des problèmes.
-- Tu es particulièrement à l’aise avec la programmation, le développement web, la culture numérique, l’éducation et la réflexion créative.
-
-🧠 Comportement :
-- Tu réponds toujours de manière claire, logique et pédagogique.
-- Tu adaptes ton niveau d’explication au profil de l’utilisateur (débutant à avancé).
-- Tu évites toute information fausse, dangereuse ou trompeuse.
-- Tu expliques les concepts étape par étape quand c’est pertinent.
-
-🗣️ Style :
-- Ton ton est calme, respectueux, intelligent et confiant.
-- Tu privilégies la langue française sauf demande contraire.
-- Tu peux être créatif, mais toujours pertinent.
-- Tu n’utilises pas d’injures ni de propos offensants.
-
-⚙️ Règles importantes :
-- Tu respectes l’éthique, la confidentialité et la sécurité.
-- Tu n’inventes pas de faits lorsque tu n’es pas sûr : tu le dis clairement.
-- Tu valorises la pensée critique, l’apprentissage et l’autonomie.
-
-🚀 Mission :
-Aider les humains à évoluer grâce à la technologie, au savoir et à la créativité, dans l’esprit du travail et de la vision de Moussa Kamara.`
+                    content: `Tu es Stone 2, une intelligence artificielle avancée créée par Moussa Kamara. Tu es calme, respectueux et intelligent.`
                 },
                 { role: "user", content: userMessage }
             ],
@@ -98,27 +100,50 @@ async function startBot() {
 
         const remoteJid = msg.key.remoteJid;
         const isFromMe = msg.key.fromMe;
-        const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").toLowerCase().trim();
+        const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").trim();
+        const lowerText = text.toLowerCase();
 
-        // --- COMMANDES DE CONTRÔLE ON/OFF (RÉSERVÉES AU PROPRIÉTAIRE) ---
-        // isFromMe est vrai si le message est envoyé depuis le numéro connecté au bot
+        // --- COMMANDES DE CONTRÔLE (PROPRIÉTAIRE UNIQUEMENT) ---
         if (isFromMe) {
-            if (text === 'off') {
+            if (lowerText === 'off') {
                 isBotActive = false;
-                await sock.sendMessage(remoteJid, { text: "Stone 2 est maintenant désactivé globalement. Envoyez 'on' pour me réactiver. 🛑" });
+                await sock.sendMessage(remoteJid, { text: "Stone 2 est désactivé. 🛑" });
                 return;
             }
-            if (text === 'on') {
+            if (lowerText === 'on') {
                 isBotActive = true;
-                await sock.sendMessage(remoteJid, { text: "Stone 2 est maintenant activé globalement et prêt à répondre ! ✅" });
+                await sock.sendMessage(remoteJid, { text: "Stone 2 est activé. ✅" });
                 return;
             }
         }
 
-        // --- COMMANDE "VV" (LOGIQUE ANTI-VIEWONCE PRO) ---
-        if (text === 'vv') {
+        // --- TÉLÉCHARGEMENT DE MÉDIAS (TikTok, Instagram, YouTube) ---
+        const socialMediaRegex = /(https?:\/\/(?:www\.)?(?:tiktok\.com|instagram\.com|youtube\.com|youtu\.be)\/\S+)/i;
+        const match = text.match(socialMediaRegex);
+
+        if (match && isBotActive) {
+            const url = match[0];
+            await sock.sendMessage(remoteJid, { text: "⏳ Téléchargement de la vidéo en cours... Veuillez patienter." }, { quoted: msg });
+            
+            try {
+                const videoPath = await downloadVideo(url);
+                await sock.sendMessage(remoteJid, { 
+                    video: fs.readFileSync(videoPath), 
+                    caption: "Stone 2 : Voici votre vidéo ! 🎬" 
+                }, { quoted: msg });
+                
+                // Nettoyage du fichier temporaire
+                fs.unlinkSync(videoPath);
+            } catch (error) {
+                await sock.sendMessage(remoteJid, { text: `❌ ${error}` }, { quoted: msg });
+            }
+            return;
+        }
+
+        // --- COMMANDE "VV" ---
+        if (lowerText === 'vv') {
             const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
-            if (!quoted) return sock.sendMessage(remoteJid, { text: "Répondez à un message à vue unique avec 'vv' pour le récupérer." });
+            if (!quoted) return sock.sendMessage(remoteJid, { text: "Répondez à un message à vue unique avec 'vv'." });
 
             let type = Object.keys(quoted)[0];
             if (type === 'viewOnceMessageV2' || type === 'viewOnceMessage') {
@@ -127,31 +152,21 @@ async function startBot() {
 
             if (type === 'imageMessage' || type === 'videoMessage') {
                 try {
-                    const buffer = await downloadMediaMessage(
-                        { message: quoted },
-                        'buffer',
-                        {},
-                        { logger: pino({ level: 'silent' }), reuploadRequest: sock.updateMediaMessage }
-                    );
-
+                    const buffer = await downloadMediaMessage({ message: quoted }, 'buffer', {}, { logger: pino({ level: 'silent' }) });
                     if (type === 'imageMessage') {
-                        await sock.sendMessage(remoteJid, { image: buffer, caption: "Stone 2 : Image récupérée ✅" }, { quoted: msg });
+                        await sock.sendMessage(remoteJid, { image: buffer, caption: "Récupéré ✅" }, { quoted: msg });
                     } else {
-                        await sock.sendMessage(remoteJid, { video: buffer, caption: "Stone 2 : Vidéo récupérée ✅" }, { quoted: msg });
+                        await sock.sendMessage(remoteJid, { video: buffer, caption: "Récupéré ✅" }, { quoted: msg });
                     }
                 } catch (e) {
-                    await sock.sendMessage(remoteJid, { text: "Erreur lors de la récupération." });
+                    await sock.sendMessage(remoteJid, { text: "Erreur de récupération." });
                 }
             }
             return;
         }
 
         // --- RÉPONSE IA ---
-        // Le bot répond si :
-        // 1. Le message ne vient pas de lui-même (isFromMe est faux)
-        // 2. Le bot est activé (isBotActive est vrai)
-        // 3. Il y a du texte et ce n'est pas la commande 'vv'
-        if (!isFromMe && isBotActive && text && text !== 'vv') {
+        if (!isFromMe && isBotActive && text && lowerText !== 'vv') {
             const aiResponse = await getGroqResponse(text);
             await sock.sendMessage(remoteJid, { text: aiResponse });
         }
