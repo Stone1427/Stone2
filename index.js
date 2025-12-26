@@ -17,7 +17,7 @@ const groq = new Groq({ apiKey: "gsk_9tIndqjp2WhPDbUhwNPGWGdyb3FYoU5t7d3W4DwN6Bg
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 const question = (text) => new Promise((resolve) => rl.question(text, resolve));
 
-// Variable pour gérer l'état d'activation du bot (activé par défaut)
+// Variable globale pour gérer l'état d'activation du bot
 let isBotActive = true;
 
 async function getGroqResponse(userMessage) {
@@ -100,16 +100,17 @@ async function startBot() {
         const isFromMe = msg.key.fromMe;
         const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").toLowerCase().trim();
 
-        // --- COMMANDES DE CONTRÔLE ON/OFF ---
-        if (!isFromMe) {
+        // --- COMMANDES DE CONTRÔLE ON/OFF (RÉSERVÉES AU PROPRIÉTAIRE) ---
+        // isFromMe est vrai si le message est envoyé depuis le numéro connecté au bot
+        if (isFromMe) {
             if (text === 'off') {
                 isBotActive = false;
-                await sock.sendMessage(remoteJid, { text: "Stone 2 est maintenant désactivé. Envoyez 'on' pour me réactiver. 🛑" });
+                await sock.sendMessage(remoteJid, { text: "Stone 2 est maintenant désactivé globalement. Envoyez 'on' pour me réactiver. 🛑" });
                 return;
             }
             if (text === 'on') {
                 isBotActive = true;
-                await sock.sendMessage(remoteJid, { text: "Stone 2 est maintenant activé et prêt à vous aider ! ✅" });
+                await sock.sendMessage(remoteJid, { text: "Stone 2 est maintenant activé globalement et prêt à répondre ! ✅" });
                 return;
             }
         }
@@ -119,18 +120,13 @@ async function startBot() {
             const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
             if (!quoted) return sock.sendMessage(remoteJid, { text: "Répondez à un message à vue unique avec 'vv' pour le récupérer." });
 
-            // On cherche le média à l'intérieur du message cité (même s'il est caché dans viewOnceMessageV2)
             let type = Object.keys(quoted)[0];
-            let mediaData = quoted[type];
-
             if (type === 'viewOnceMessageV2' || type === 'viewOnceMessage') {
                 type = Object.keys(quoted[type].message)[0];
-                mediaData = quoted[Object.keys(quoted)[0]].message[type];
             }
 
             if (type === 'imageMessage' || type === 'videoMessage') {
                 try {
-                    console.log(`[VV] Téléchargement du média cité (${type})...`);
                     const buffer = await downloadMediaMessage(
                         { message: quoted },
                         'buffer',
@@ -144,21 +140,20 @@ async function startBot() {
                         await sock.sendMessage(remoteJid, { video: buffer, caption: "Stone 2 : Vidéo récupérée ✅" }, { quoted: msg });
                     }
                 } catch (e) {
-                    console.error("[VV ERROR]", e);
-                    await sock.sendMessage(remoteJid, { text: "Erreur lors de la récupération. Le média a peut-être expiré ou est inaccessible." });
+                    await sock.sendMessage(remoteJid, { text: "Erreur lors de la récupération." });
                 }
-            } else {
-                await sock.sendMessage(remoteJid, { text: "Le message cité n'est pas une image ou une vidéo." });
             }
             return;
         }
 
-        // --- RÉPONSE IA (Seulement si le bot est activé) ---
-        if (!isFromMe && text && text !== 'vv') {
-            if (isBotActive) {
-                const aiResponse = await getGroqResponse(text);
-                await sock.sendMessage(remoteJid, { text: aiResponse });
-            }
+        // --- RÉPONSE IA ---
+        // Le bot répond si :
+        // 1. Le message ne vient pas de lui-même (isFromMe est faux)
+        // 2. Le bot est activé (isBotActive est vrai)
+        // 3. Il y a du texte et ce n'est pas la commande 'vv'
+        if (!isFromMe && isBotActive && text && text !== 'vv') {
+            const aiResponse = await getGroqResponse(text);
+            await sock.sendMessage(remoteJid, { text: aiResponse });
         }
     });
 }
