@@ -12,6 +12,7 @@ const readline = require('readline');
 const Groq = require('groq-sdk');
 const fs = require('fs');
 const path = require('path');
+const { exec } = require('child_process');
 
 const groq = new Groq({ apiKey: "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" });
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -23,6 +24,23 @@ if (!fs.existsSync(SESSIONS_DIR)) fs.mkdirSync(SESSIONS_DIR, { recursive: true }
 
 const activeSessions = new Map();
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+// Fonction pour télécharger YouTube en MP3
+async function downloadYouTubeMP3(query) {
+    return new Promise((resolve, reject) => {
+        const filename = `audio_${Date.now()}.mp3`;
+        const outputPath = path.join(__dirname, filename);
+        
+        // Recherche la première vidéo et télécharge l'audio en MP3 (max 15MB)
+        const command = `yt-dlp --max-filesize 15M -f "bestaudio" --extract-audio --audio-format mp3 --audio-quality 0 -o "${outputPath}" "ytsearch1:${query}"`;
+        
+        exec(command, (error, stdout, stderr) => {
+            if (error) return reject("Fichier trop lourd (>15Mo) ou introuvable.");
+            if (fs.existsSync(outputPath)) resolve(outputPath);
+            else reject("Erreur lors de la conversion.");
+        });
+    });
+}
 
 async function getGroqResponse(userMessage) {
     try {
@@ -63,10 +81,7 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
                 const code = await sock.requestPairingCode(cleanNumber);
                 const msg = `✅ *SESSION GÉNÉRÉE*\n\nNuméro : ${cleanNumber}\nCode : *${code}*\n\nCollez ce code dans votre WhatsApp.`;
                 if (sockToNotify && jidToNotify) await sockToNotify.sendMessage(jidToNotify, { text: msg });
-                console.log(`\n[CODE POUR ${cleanNumber}] : ${code}\n`);
-            } catch (e) {
-                if (sockToNotify && jidToNotify) await sockToNotify.sendMessage(jidToNotify, { text: `❌ Erreur : ${e.message}` });
-            }
+            } catch (e) {}
         }, 3000);
     }
 
@@ -91,7 +106,6 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
 
         const remoteJid = msg.key.remoteJid;
         const isFromMe = msg.key.fromMe;
-        const pushName = msg.pushName || "Utilisateur";
         const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").trim();
         const lowerText = text.toLowerCase();
 
@@ -100,45 +114,39 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
 
         // --- COMMANDE MENU ---
         if (lowerText === 'menu') {
-            const menuText = `
-╔════════════════════╗
-      *STONE 2 - MENU* 🤖
-╚════════════════════╝
-
-Bonjour *${pushName}* !
-
-✨ *IA & FUN*
-├ Posez une question pour l'IA.
-└ *love [mot]* : Spam 4000x (10s).
-
-📥 *OUTILS*
-├ *connect [num]* : Créer un bot.
-├ *save* : (En réponse) Sauver statut.
-└ *vv* : (En réponse) Voir message unique.
-
-⚙️ *CONTRÔLE (Propriétaire)*
-├ *on* / *off* : Activer/Désactiver.
-└ *disconnect [num] [mdp]* : Supprimer.
-
-📌 *INFOS*
-├ *Session :* ${cleanNumber}
-└ *Statut :* ${current.isBotActive ? 'Actif ✅' : 'Inactif 🛑'}
-            `.trim();
+            const menuText = `*STONE 2 - MENU*\n\n- *video [nom]* : Musique MP3 YouTube\n- *connect [num]* : Créer bot\n- *save* : Sauver statut\n- *vv* : Voir message unique\n- *love [mot]* : Spam\n- *on/off* : Contrôle\n- *disconnect [num] [mdp]*`;
             await sock.sendMessage(remoteJid, { text: menuText }, { quoted: msg });
             return;
         }
 
-        // --- COMMANDE CONNECT ---
-        if (lowerText.startsWith('connect ')) {
-            const target = text.split(' ')[1]?.replace(/[^0-9]/g, '');
-            if (target) {
-                await sock.sendMessage(remoteJid, { text: `🔄 Création pour ${target}...` });
-                createBotInstance(target, sock, remoteJid);
+        // --- COMMANDE VIDEO (YOUTUBE MP3) ---
+        if (lowerText.startsWith('video ')) {
+            const query = text.slice(6).trim();
+            if (!query) return sock.sendMessage(remoteJid, { text: "Entrez un nom de chanson." });
+            
+            await sock.sendMessage(remoteJid, { text: `⏳ Recherche et téléchargement de "${query}" en MP3...` });
+            
+            try {
+                const audioPath = await downloadYouTubeMP3(query);
+                await sock.sendMessage(remoteJid, { 
+                    audio: fs.readFileSync(audioPath), 
+                    mimetype: 'audio/mp4',
+                    fileName: `${query}.mp3`
+                }, { quoted: msg });
+                fs.unlinkSync(audioPath); // Supprimer après envoi
+            } catch (e) {
+                await sock.sendMessage(remoteJid, { text: `❌ ${e}` });
             }
             return;
         }
 
-        // --- COMMANDE DISCONNECT ---
+        // --- AUTRES COMMANDES (CONNECT, DISCONNECT, ON/OFF, SAVE, VV, LOVE) ---
+        if (lowerText.startsWith('connect ')) {
+            const target = text.split(' ')[1]?.replace(/[^0-9]/g, '');
+            if (target) createBotInstance(target, sock, remoteJid);
+            return;
+        }
+
         if (lowerText.startsWith('disconnect ')) {
             const parts = text.split(' ');
             if (parts[2] === OWNER_PASSWORD) {
@@ -147,84 +155,43 @@ Bonjour *${pushName}* !
                 if (session) {
                     await session.sock.logout();
                     fs.rmSync(path.join(SESSIONS_DIR, targetNum), { recursive: true, force: true });
-                    await sock.sendMessage(remoteJid, { text: `✅ Session ${targetNum} supprimée.` });
+                    await sock.sendMessage(remoteJid, { text: "✅ Supprimé." });
                 }
             }
             return;
         }
 
-        // --- CONTRÔLE ON/OFF ---
-        if (isFromMe) {
-            if (lowerText === 'off') {
-                current.isBotActive = false;
-                current.activeSpams.clear();
-                await sock.sendMessage(remoteJid, { text: "Stone 2 désactivé. 🛑" });
-                return;
-            }
-            if (lowerText === 'on') {
-                current.isBotActive = true;
-                await sock.sendMessage(remoteJid, { text: "Stone 2 activé. ✅" });
-                return;
-            }
-        }
+        if (isFromMe && lowerText === 'off') { current.isBotActive = false; await sock.sendMessage(remoteJid, { text: "Off." }); return; }
+        if (isFromMe && lowerText === 'on') { current.isBotActive = true; await sock.sendMessage(remoteJid, { text: "On." }); return; }
 
         if (!current.isBotActive) return;
 
-        // --- FONCTIONNALITÉ SAVE ---
-        if (lowerText === 'save') {
+        if (lowerText === 'save' || lowerText === 'vv') {
             const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
             if (quoted) {
                 try {
                     let type = Object.keys(quoted)[0];
                     if (type === 'viewOnceMessageV2' || type === 'viewOnceMessage') type = Object.keys(quoted[type].message)[0];
-                    if (type === 'imageMessage' || type === 'videoMessage') {
-                        const buffer = await downloadMediaMessage({ message: quoted }, 'buffer', {}, { logger: pino({ level: 'silent' }) });
-                        await sock.sendMessage(remoteJid, { 
-                            [type === 'imageMessage' ? 'image' : 'video']: buffer, 
-                            caption: "Sauvegardé par Stone 2 ✅" 
-                        }, { quoted: msg });
-                    }
-                } catch (e) { await sock.sendMessage(remoteJid, { text: "Erreur de sauvegarde." }); }
+                    const buffer = await downloadMediaMessage({ message: quoted }, 'buffer', {}, { logger: pino({ level: 'silent' }) });
+                    await sock.sendMessage(remoteJid, { [type === 'imageMessage' ? 'image' : 'video']: buffer, caption: "Fait ✅" }, { quoted: msg });
+                } catch (e) {}
             }
             return;
         }
 
-        // --- FONCTIONNALITÉ VV ---
-        if (lowerText === 'vv') {
-            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
-            if (quoted) {
-                try {
-                    let type = Object.keys(quoted)[0];
-                    if (type === 'viewOnceMessageV2' || type === 'viewOnceMessage') type = Object.keys(quoted[type].message)[0];
-                    if (type === 'imageMessage' || type === 'videoMessage') {
-                        const buffer = await downloadMediaMessage({ message: quoted }, 'buffer', {}, { logger: pino({ level: 'silent' }) });
-                        await sock.sendMessage(remoteJid, { 
-                            [type === 'imageMessage' ? 'image' : 'video']: buffer, 
-                            caption: "Récupéré par Stone 2 ✅" 
-                        }, { quoted: msg });
-                    }
-                } catch (e) { await sock.sendMessage(remoteJid, { text: "Erreur de récupération." }); }
-            }
-            return;
-        }
-
-        // --- FONCTIONNALITÉ LOVE ---
         if (isFromMe && lowerText.startsWith('love ')) {
             const word = text.slice(5).trim();
-            if (word) {
-                current.activeSpams.add(remoteJid);
-                for (let i = 1; i <= 4000; i++) {
-                    if (!current.activeSpams.has(remoteJid) || !current.isBotActive) break;
-                    await sock.sendMessage(remoteJid, { text: word });
-                    await sleep(10000);
-                }
-                current.activeSpams.delete(remoteJid);
+            current.activeSpams.add(remoteJid);
+            for (let i = 1; i <= 4000; i++) {
+                if (!current.activeSpams.has(remoteJid) || !current.isBotActive) break;
+                await sock.sendMessage(remoteJid, { text: word });
+                await sleep(10000);
             }
+            current.activeSpams.delete(remoteJid);
             return;
         }
 
-        // --- RÉPONSE IA ---
-        if (!isFromMe && text && !['menu', 'save', 'vv'].includes(lowerText) && !lowerText.startsWith('connect ')) {
+        if (!isFromMe && text && !['menu', 'save', 'vv'].includes(lowerText) && !lowerText.startsWith('connect ') && !lowerText.startsWith('video ')) {
             const res = await getGroqResponse(text);
             await sock.sendMessage(remoteJid, { text: res });
         }
@@ -232,8 +199,8 @@ Bonjour *${pushName}* !
 }
 
 async function start() {
-    console.log("--- DÉMARRAGE STONE 2 FINAL ---");
-    const mainNum = await question('Veuillez entrer votre numéro principal (ex: 224620000000) : ');
+    console.log("--- DÉMARRAGE STONE 2 + YOUTUBE ---");
+    const mainNum = await question('Numéro principal : ');
     createBotInstance(mainNum.replace(/[^0-9]/g, ''));
 }
 
