@@ -19,10 +19,7 @@ const question = (text) => new Promise((resolve) => rl.question(text, resolve));
 
 const OWNER_PASSWORD = "613031896";
 const SESSIONS_DIR = path.join(__dirname, 'sessions');
-
-if (!fs.existsSync(SESSIONS_DIR)) {
-    fs.mkdirSync(SESSIONS_DIR, { recursive: true });
-}
+if (!fs.existsSync(SESSIONS_DIR)) fs.mkdirSync(SESSIONS_DIR, { recursive: true });
 
 const activeSessions = new Map();
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -40,8 +37,8 @@ async function getGroqResponse(userMessage) {
     } catch (error) { return "Cerveau indisponible."; }
 }
 
-async function createBotInstance(sessionId, phoneNumber = null) {
-    console.log(`[SYSTÈME] Initialisation de la session : ${sessionId}...`);
+async function createBotInstance(sessionId, phoneNumber = null, isAutoReconnect = true) {
+    console.log(`[SYSTÈME] Démarrage de : ${sessionId}`);
     
     const sessionPath = path.join(SESSIONS_DIR, sessionId);
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
@@ -57,39 +54,37 @@ async function createBotInstance(sessionId, phoneNumber = null) {
         },
     });
 
-    activeSessions.set(sessionId, {
-        sock,
-        isBotActive: true,
-        activeSpams: new Set()
-    });
+    activeSessions.set(sessionId, { sock, isBotActive: true, activeSpams: new Set() });
 
-    // Demande de numéro si non enregistré
-    if (!sock.authState.creds.registered && sessionId === 'main_session') {
-        if (!phoneNumber) {
-            phoneNumber = await question('[CONNEXION] Veuillez entrer votre numéro (ex: 224620000000) : ');
-        }
-        
+    // Pairing Code pour la session principale ou nouvelle session
+    if (!sock.authState.creds.registered && (sessionId === 'main_session' || phoneNumber)) {
+        const num = phoneNumber || await question('[CONNEXION] Entrez votre numéro (ex: 224620000000) : ');
         setTimeout(async () => {
             try {
-                const code = await sock.requestPairingCode(phoneNumber.replace(/[^0-9]/g, ''));
-                console.log(`\n[CODE D'APPAIRAGE] Votre code est : ${code}\n`);
-            } catch (e) {
-                console.error("[ERREUR] Impossible de générer le code :", e.message);
-            }
-        }, 2000);
+                const code = await sock.requestPairingCode(num.replace(/[^0-9]/g, ''));
+                console.log(`\n[CODE ${sessionId}] : ${code}\n`);
+            } catch (e) { console.log(`[ERREUR CODE] ${sessionId}: ${e.message}`); }
+        }, 3000);
     }
 
     sock.ev.on('creds.update', saveCreds);
 
-    sock.ev.on('connection.update', (update) => {
+    sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect } = update;
         if (connection === 'close') {
-            const shouldReconnect = (lastDisconnect.error instanceof Boom) ? 
-                lastDisconnect.error.output.statusCode !== DisconnectReason.loggedOut : true;
-            console.log(`[SESSION ${sessionId}] Connexion fermée. Reconnexion : ${shouldReconnect}`);
-            if (shouldReconnect) createBotInstance(sessionId);
+            const statusCode = (lastDisconnect.error instanceof Boom) ? lastDisconnect.error.output.statusCode : 0;
+            const shouldReconnect = statusCode !== DisconnectReason.loggedOut && isAutoReconnect;
+            
+            console.log(`[${sessionId}] Déconnecté. Reconnexion : ${shouldReconnect} (Code: ${statusCode})`);
+            
+            if (shouldReconnect) {
+                await sleep(5000); // Attendre 5s avant de retenter
+                createBotInstance(sessionId, phoneNumber, true);
+            } else {
+                activeSessions.delete(sessionId);
+            }
         } else if (connection === 'open') { 
-            console.log(`[SESSION ${sessionId}] ✅ Connectée et opérationnelle !`); 
+            console.log(`[${sessionId}] ✅ CONNECTÉ`); 
         }
     });
 
@@ -104,9 +99,9 @@ async function createBotInstance(sessionId, phoneNumber = null) {
 
         // --- COMMANDES ---
         if (lowerText === 'connect') {
-            const targetNumber = remoteJid.split('@')[0];
-            await sock.sendMessage(remoteJid, { text: "🔄 Préparation de votre session..." });
-            createBotInstance(`session_${targetNumber}`, targetNumber);
+            const target = remoteJid.split('@')[0];
+            await sock.sendMessage(remoteJid, { text: "🔄 Création de votre bot..." });
+            createBotInstance(`session_${target}`, target, true);
             return;
         }
 
@@ -118,15 +113,13 @@ async function createBotInstance(sessionId, phoneNumber = null) {
                 if (session) {
                     await session.sock.logout();
                     fs.rmSync(path.join(SESSIONS_DIR, targetId), { recursive: true, force: true });
-                    await sock.sendMessage(remoteJid, { text: "✅ Déconnecté." });
+                    await sock.sendMessage(remoteJid, { text: "✅ Supprimé." });
                 }
-            } else {
-                await sock.sendMessage(remoteJid, { text: "❌ MDP incorrect." });
             }
             return;
         }
 
-        // ... (Reste de la logique IA, Save, VV, Love identique)
+        // Logique IA / Save / VV / Love (simplifiée pour la stabilité)
         const current = activeSessions.get(sessionId);
         if (!current || !current.isBotActive) return;
 
@@ -139,10 +132,5 @@ async function createBotInstance(sessionId, phoneNumber = null) {
     });
 }
 
-console.log("====================================");
-console.log("   DÉMARRAGE DU SYSTÈME STONE 2     ");
-console.log("====================================");
-
-createBotInstance('main_session').catch(err => {
-    console.error("[ERREUR CRITIQUE]", err);
-});
+console.log("--- DÉMARRAGE STONE 2 STABLE ---");
+createBotInstance('main_session');
