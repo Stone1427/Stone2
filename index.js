@@ -19,6 +19,7 @@ const question = (text) => new Promise((resolve) => rl.question(text, resolve));
 
 // État global du bot
 let isBotActive = true;
+let activeSpams = new Set(); // Pour suivre les processus de "love" actifs
 
 async function getGroqResponse(userMessage) {
     try {
@@ -35,6 +36,9 @@ async function getGroqResponse(userMessage) {
         return completion.choices[0]?.message?.content || "Désolé, je n'ai pas pu générer de réponse.";
     } catch (error) { return "Désolé, mon cerveau d'IA est temporairement indisponible."; }
 }
+
+// Fonction utilitaire pour le délai
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
@@ -74,50 +78,77 @@ async function startBot() {
         const remoteJid = msg.key.remoteJid;
         const isFromMe = msg.key.fromMe;
         const pushName = msg.pushName || "Utilisateur";
-        const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").toLowerCase().trim();
+        const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").trim();
+        const lowerText = text.toLowerCase();
 
         // --- COMMANDE MENU ---
-        if (text === 'menu') {
+        if (lowerText === 'menu') {
             const menuText = `
 ╔════════════════════╗
       *STONE 2 - MENU* 🤖
 ╚════════════════════╝
 
-Bonjour *${pushName}* ! Voici la liste de mes fonctionnalités :
+Bonjour *${pushName}* ! Voici mes commandes :
 
-✨ *INTELLIGENCE ARTIFICIELLE*
-└ Posez-moi n'importe quelle question et je vous répondrai intelligemment.
+✨ *IA & FUN*
+├ Posez une question pour l'IA.
+└ *love [mot]* : Envoie un mot 4000 fois (Délai 10s).
 
-📥 *STATUS SAVER*
-└ Répondez à un statut (photo/vidéo) avec le mot *save* pour l'enregistrer.
-
-👁️ *ANTI-VIEW ONCE*
-└ Répondez à un message à vue unique avec *vv* pour le récupérer.
+📥 *OUTILS*
+├ *save* : (En réponse) Sauvegarder un statut.
+└ *vv* : (En réponse) Récupérer un message unique.
 
 ⚙️ *CONTRÔLE (Propriétaire)*
-├ *on* : Activer le bot.
-└ *off* : Désactiver le bot.
+├ *on* / *off* : Activer/Désactiver le bot.
+└ *stoplove* : Arrêter l'envoi massif en cours.
 
 📌 *INFOS*
 ├ *Développeur :* Moussa Kamara
-└ *Statut :* ${isBotActive ? 'En ligne ✅' : 'Hors ligne 🛑'}
-
----
-_Tapez une commande pour commencer !_
+└ *Statut :* ${isBotActive ? 'Actif ✅' : 'Inactif 🛑'}
             `.trim();
-            
             await sock.sendMessage(remoteJid, { text: menuText }, { quoted: msg });
             return;
         }
 
-        // --- COMMANDES DE CONTRÔLE (PROPRIÉTAIRE) ---
+        // --- COMMANDE LOVE (PROPRIÉTAIRE UNIQUEMENT) ---
+        if (isFromMe && lowerText.startsWith('love ')) {
+            const wordToRepeat = text.slice(5).trim();
+            if (!wordToRepeat) return sock.sendMessage(remoteJid, { text: "Veuillez préciser le mot après 'love'." });
+
+            activeSpams.add(remoteJid);
+            await sock.sendMessage(remoteJid, { text: `🚀 Lancement de l'envoi de "${wordToRepeat}" 4000 fois avec un délai de 10s.\nTapez *stoplove* pour arrêter.` });
+
+            for (let i = 1; i <= 4000; i++) {
+                if (!activeSpams.has(remoteJid) || !isBotActive) break;
+                
+                await sock.sendMessage(remoteJid, { text: wordToRepeat });
+                await sleep(10000); // Délai de 10 secondes
+            }
+            
+            activeSpams.delete(remoteJid);
+            return;
+        }
+
+        // --- COMMANDE STOPLOVE ---
+        if (isFromMe && lowerText === 'stoplove') {
+            if (activeSpams.has(remoteJid)) {
+                activeSpams.delete(remoteJid);
+                await sock.sendMessage(remoteJid, { text: "🛑 Envoi massif arrêté avec succès." });
+            } else {
+                await sock.sendMessage(remoteJid, { text: "Aucun envoi massif n'est en cours ici." });
+            }
+            return;
+        }
+
+        // --- COMMANDES DE CONTRÔLE ---
         if (isFromMe) {
-            if (text === 'off') {
+            if (lowerText === 'off') {
                 isBotActive = false;
+                activeSpams.clear(); // Arrête tout envoi en cours
                 await sock.sendMessage(remoteJid, { text: "Stone 2 est désactivé. 🛑" });
                 return;
             }
-            if (text === 'on') {
+            if (lowerText === 'on') {
                 isBotActive = true;
                 await sock.sendMessage(remoteJid, { text: "Stone 2 est activé. ✅" });
                 return;
@@ -125,9 +156,9 @@ _Tapez une commande pour commencer !_
         }
 
         // --- FONCTIONNALITÉ STATUS SAVER (SAVE) ---
-        if (text === 'save' && isBotActive) {
+        if (lowerText === 'save' && isBotActive) {
             const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
-            if (!quoted) return sock.sendMessage(remoteJid, { text: "Répondez à un statut avec 'save'." });
+            if (!quoted) return;
 
             let type = Object.keys(quoted)[0];
             if (type === 'viewOnceMessageV2' || type === 'viewOnceMessage') {
@@ -142,17 +173,15 @@ _Tapez une commande pour commencer !_
                         video: type === 'videoMessage' ? buffer : undefined,
                         caption: "Stone 2 : Sauvegardé ! ✅" 
                     }, { quoted: msg });
-                } catch (e) {
-                    await sock.sendMessage(remoteJid, { text: "Erreur de sauvegarde." });
-                }
+                } catch (e) {}
             }
             return;
         }
 
         // --- COMMANDE "VV" ---
-        if (text === 'vv') {
+        if (lowerText === 'vv') {
             const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
-            if (!quoted) return sock.sendMessage(remoteJid, { text: "Répondez à un message à vue unique avec 'vv'." });
+            if (!quoted) return;
 
             let type = Object.keys(quoted)[0];
             if (type === 'viewOnceMessageV2' || type === 'viewOnceMessage') {
@@ -167,15 +196,13 @@ _Tapez une commande pour commencer !_
                         video: type === 'videoMessage' ? buffer : undefined,
                         caption: "Récupéré ✅" 
                     }, { quoted: msg });
-                } catch (e) {
-                    await sock.sendMessage(remoteJid, { text: "Erreur de récupération." });
-                }
+                } catch (e) {}
             }
             return;
         }
 
         // --- RÉPONSE IA ---
-        if (!isFromMe && isBotActive && text && text !== 'vv' && text !== 'save' && text !== 'menu') {
+        if (!isFromMe && isBotActive && text && lowerText !== 'vv' && lowerText !== 'save' && lowerText !== 'menu') {
             const aiResponse = await getGroqResponse(text);
             await sock.sendMessage(remoteJid, { text: aiResponse });
         }
