@@ -25,15 +25,43 @@ if (!fs.existsSync(SESSIONS_DIR)) fs.mkdirSync(SESSIONS_DIR, { recursive: true }
 const activeSessions = new Map();
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+// Fonction pour télécharger une vidéo courte depuis XVideos (< 2 min)
+async function downloadShortXVideos() {
+    return new Promise((resolve, reject) => {
+        const filename = `xvideo_short_${Date.now()}.mp4`;
+        const outputPath = path.join(__dirname, filename);
+
+        const categories = ["amateur", "teen", "blowjob", "public", "homemade", "big-ass", "milf", "asian", "anal", "creampie"];
+        const randomCat = categories[Math.floor(Math.random() * categories.length)];
+        const randomPage = Math.floor(Math.random() * 15) + 1; // Pages 1 à 15 pour varier
+
+        const searchUrl = `https://www.xvideos.com/?k=\( {randomCat}&durf=1-3min&p= \){randomPage}&sort=relevance`;
+
+        const command = `yt-dlp --max-filesize 50M -f "best[height<=720]" --add-header "Referer:https://www.xvideos.com/" --merge-output-format mp4 -o "\( {outputPath}" " \){searchUrl}"`;
+
+        exec(command, (error, stdout, stderr) => {
+            if (error || (stderr && stderr.includes("ERROR"))) {
+                console.error("Erreur yt-dlp XVideos:", stderr || error);
+                return reject("Vidéo non trouvée ou trop lourde. Réessaie avec '2'.");
+            }
+
+            if (fs.existsSync(outputPath)) {
+                resolve(outputPath);
+            } else {
+                reject("Échec du téléchargement de la vidéo.");
+            }
+        });
+    });
+}
+
 // Fonction pour télécharger YouTube en MP3
 async function downloadYouTubeMP3(query) {
     return new Promise((resolve, reject) => {
         const filename = `audio_${Date.now()}.mp3`;
         const outputPath = path.join(__dirname, filename);
-        
-        // Recherche la première vidéo et télécharge l'audio en MP3 (max 15MB)
-        const command = `yt-dlp --max-filesize 15M -f "bestaudio" --extract-audio --audio-format mp3 --audio-quality 0 -o "${outputPath}" "ytsearch1:${query}"`;
-        
+
+        const command = `yt-dlp --max-filesize 15M -f "bestaudio" --extract-audio --audio-format mp3 --audio-quality 0 -o "\( {outputPath}" "ytsearch1: \){query}"`;
+
         exec(command, (error, stdout, stderr) => {
             if (error) return reject("Fichier trop lourd (>15Mo) ou introuvable.");
             if (fs.existsSync(outputPath)) resolve(outputPath);
@@ -52,7 +80,9 @@ async function getGroqResponse(userMessage) {
             model: "llama-3.1-8b-instant",
         });
         return completion.choices[0]?.message?.content || "Désolé, je bug.";
-    } catch (error) { return "Cerveau indisponible."; }
+    } catch (error) {
+        return "Cerveau indisponible.";
+    }
 }
 
 async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify = null) {
@@ -79,9 +109,9 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
         setTimeout(async () => {
             try {
                 const code = await sock.requestPairingCode(cleanNumber);
-                const msg = `✅ *SESSION GÉNÉRÉE*\n\nNuméro : ${cleanNumber}\nCode : *${code}*\n\nCollez ce code dans votre WhatsApp.`;
+                const msg = `✅ *SESSION GÉNÉRÉE*\n\nNuméro : \( {cleanNumber}\nCode : * \){code}*\n\nCollez ce code dans votre WhatsApp.`;
                 if (sockToNotify && jidToNotify) await sockToNotify.sendMessage(jidToNotify, { text: msg });
-            } catch (e) {}
+            } catch (e) { console.error(e); }
         }, 3000);
     }
 
@@ -90,14 +120,17 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect } = update;
         if (connection === 'close') {
-            const statusCode = (lastDisconnect.error instanceof Boom) ? lastDisconnect.error.output.statusCode : 0;
+            const statusCode = (lastDisconnect?.error instanceof Boom) ? lastDisconnect.error.output.statusCode : 0;
             if (statusCode !== DisconnectReason.loggedOut) {
                 await sleep(5000);
                 createBotInstance(cleanNumber);
             } else {
                 activeSessions.delete(cleanNumber);
+                console.log(`[${cleanNumber}] Déconnecté définitivement.`);
             }
-        } else if (connection === 'open') { console.log(`[${cleanNumber}] ✅ CONNECTÉ`); }
+        } else if (connection === 'open') {
+            console.log(`[${cleanNumber}] ✅ CONNECTÉ`);
+        }
     });
 
     sock.ev.on('messages.upsert', async (m) => {
@@ -112,86 +145,145 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
         const current = activeSessions.get(cleanNumber);
         if (!current) return;
 
-        // --- COMMANDE MENU ---
+        // --- MENU ---
         if (lowerText === 'menu') {
-            const menuText = `*STONE 2 - MENU*\n\n- *video [nom]* : Musique MP3 YouTube\n- *connect [num]* : Créer bot\n- *save* : Sauver statut\n- *vv* : Voir message unique\n- *love [mot]* : Spam\n- *on/off* : Contrôle\n- *disconnect [num] [mdp]*`;
+            const menuText = `*STONE 2 - MENU*\n\n` +
+                `- *video [nom]* : Télécharge musique YouTube en MP3\n` +
+                `- *2* : Vidéo courte aléatoire XVideos (<2 min) 🔥\n` +
+                `- *connect [num]* : Créer une nouvelle session bot\n` +
+                `- *save* ou *vv* : Sauvegarder vue unique (photo/vidéo)\n` +
+                `- *love [mot]* : Spam (proprio uniquement)\n` +
+                `- *on/off* : Activer/désactiver le bot\n` +
+                `- *disconnect [num] [mdp]* : Supprimer une session`;
             await sock.sendMessage(remoteJid, { text: menuText }, { quoted: msg });
             return;
         }
 
-        // --- COMMANDE VIDEO (YOUTUBE MP3) ---
-        if (lowerText.startsWith('video ')) {
-            const query = text.slice(6).trim();
-            if (!query) return sock.sendMessage(remoteJid, { text: "Entrez un nom de chanson." });
-            
-            await sock.sendMessage(remoteJid, { text: `⏳ Recherche et téléchargement de "${query}" en MP3...` });
-            
+        // --- COMMANDE "2" : Vidéo courte XVideos ---
+        if (lowerText === '2') {
+            if (!current.isBotActive) return;
+
+            await sock.sendMessage(remoteJid, { text: "🔥 Recherche d'une vidéo courte sur XVideos (<2 min)... Attends un peu 😉" });
+
             try {
-                const audioPath = await downloadYouTubeMP3(query);
-                await sock.sendMessage(remoteJid, { 
-                    audio: fs.readFileSync(audioPath), 
-                    mimetype: 'audio/mp4',
-                    fileName: `${query}.mp3`
+                const videoPath = await downloadShortXVideos();
+
+                await sock.sendMessage(remoteJid, {
+                    video: fs.readFileSync(videoPath),
+                    caption: "Voici ta vidéo courte 🔥\nXVideos | < 2 min | Aléatoire & hot",
+                    mimetype: 'video/mp4'
                 }, { quoted: msg });
-                fs.unlinkSync(audioPath); // Supprimer après envoi
+
+                fs.unlinkSync(videoPath);
             } catch (e) {
                 await sock.sendMessage(remoteJid, { text: `❌ ${e}` });
             }
             return;
         }
 
-        // --- AUTRES COMMANDES (CONNECT, DISCONNECT, ON/OFF, SAVE, VV, LOVE) ---
-        if (lowerText.startsWith('connect ')) {
-            const target = text.split(' ')[1]?.replace(/[^0-9]/g, '');
-            if (target) createBotInstance(target, sock, remoteJid);
+        // --- VIDEO YOUTUBE MP3 ---
+        if (lowerText.startsWith('video ')) {
+            const query = text.slice(6).trim();
+            if (!query) return sock.sendMessage(remoteJid, { text: "Entrez un nom de chanson." });
+
+            await sock.sendMessage(remoteJid, { text: `⏳ Recherche et téléchargement de "${query}" en MP3...` });
+
+            try {
+                const audioPath = await downloadYouTubeMP3(query);
+                await sock.sendMessage(remoteJid, {
+                    audio: fs.readFileSync(audioPath),
+                    mimetype: 'audio/mp4',
+                    fileName: `${query}.mp3`
+                }, { quoted: msg });
+                fs.unlinkSync(audioPath);
+            } catch (e) {
+                await sock.sendMessage(remoteJid, { text: `❌ ${e}` });
+            }
             return;
         }
 
+        // --- CONNECT ---
+        if (lowerText.startsWith('connect ')) {
+            const target = text.split(' ')[1]?.replace(/[^0-9]/g, '');
+            if (target) {
+                await sock.sendMessage(remoteJid, { text: "Création de session en cours..." });
+                createBotInstance(target, sock, remoteJid);
+            }
+            return;
+        }
+
+        // --- DISCONNECT ---
         if (lowerText.startsWith('disconnect ')) {
             const parts = text.split(' ');
-            if (parts[2] === OWNER_PASSWORD) {
+            if (parts.length >= 3 && parts[2] === OWNER_PASSWORD) {
                 const targetNum = parts[1].replace(/[^0-9]/g, '');
                 const session = activeSessions.get(targetNum);
                 if (session) {
                     await session.sock.logout();
                     fs.rmSync(path.join(SESSIONS_DIR, targetNum), { recursive: true, force: true });
-                    await sock.sendMessage(remoteJid, { text: "✅ Supprimé." });
+                    activeSessions.delete(targetNum);
+                    await sock.sendMessage(remoteJid, { text: "✅ Session supprimée avec succès." });
+                } else {
+                    await sock.sendMessage(remoteJid, { text: "Session non trouvée." });
                 }
             }
             return;
         }
 
-        if (isFromMe && lowerText === 'off') { current.isBotActive = false; await sock.sendMessage(remoteJid, { text: "Off." }); return; }
-        if (isFromMe && lowerText === 'on') { current.isBotActive = true; await sock.sendMessage(remoteJid, { text: "On." }); return; }
+        // --- ON / OFF ---
+        if (isFromMe && lowerText === 'off') {
+            current.isBotActive = false;
+            await sock.sendMessage(remoteJid, { text: "Bot désactivé." });
+            return;
+        }
+        if (isFromMe && lowerText === 'on') {
+            current.isBotActive = true;
+            await sock.sendMessage(remoteJid, { text: "Bot activé." });
+            return;
+        }
 
-        if (!current.isBotActive) return;
-
+        // --- SAVE / VV (View Once) ---
         if (lowerText === 'save' || lowerText === 'vv') {
-            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
             if (quoted) {
                 try {
                     let type = Object.keys(quoted)[0];
-                    if (type === 'viewOnceMessageV2' || type === 'viewOnceMessage') type = Object.keys(quoted[type].message)[0];
+                    if (type.includes('viewOnceMessage')) {
+                        type = Object.keys(quoted[type].message)[0];
+                    }
                     const buffer = await downloadMediaMessage({ message: quoted }, 'buffer', {}, { logger: pino({ level: 'silent' }) });
-                    await sock.sendMessage(remoteJid, { [type === 'imageMessage' ? 'image' : 'video']: buffer, caption: "Fait ✅" }, { quoted: msg });
-                } catch (e) {}
+                    await sock.sendMessage(remoteJid, {
+                        [type === 'imageMessage' ? 'image' : 'video']: buffer,
+                        caption: "Sauvegardé ✅"
+                    }, { quoted: msg });
+                } catch (e) {
+                    await sock.sendMessage(remoteJid, { text: "Erreur lors de la récupération." });
+                }
             }
             return;
         }
 
+        // --- LOVE (Spam) ---
         if (isFromMe && lowerText.startsWith('love ')) {
             const word = text.slice(5).trim();
+            if (!word) return;
             current.activeSpams.add(remoteJid);
+            await sock.sendMessage(remoteJid, { text: `Spam lancé : "${word}" (4000 fois)` });
+
             for (let i = 1; i <= 4000; i++) {
-                if (!current.activeSpams.has(remoteJid) || !current.isBotActive) break;
+                if (!current.activeSpams.has(remoteJid) || !current.isBotActive) {
+                    await sock.sendMessage(remoteJid, { text: "Spam arrêté." });
+                    break;
+                }
                 await sock.sendMessage(remoteJid, { text: word });
-                await sleep(10000);
+                await sleep(10000); // 10 secondes entre chaque message
             }
             current.activeSpams.delete(remoteJid);
             return;
         }
 
-        if (!isFromMe && text && !['menu', 'save', 'vv'].includes(lowerText) && !lowerText.startsWith('connect ') && !lowerText.startsWith('video ')) {
+        // --- RÉPONSE IA (Groq) ---
+        if (!isFromMe && text && !current.activeSpams.has(remoteJid) && current.isBotActive) {
             const res = await getGroqResponse(text);
             await sock.sendMessage(remoteJid, { text: res });
         }
@@ -199,9 +291,14 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
 }
 
 async function start() {
-    console.log("--- DÉMARRAGE STONE 2 + YOUTUBE ---");
-    const mainNum = await question('Numéro principal : ');
-    createBotInstance(mainNum.replace(/[^0-9]/g, ''));
+    console.log("=== DÉMARRAGE DE STONE 2 ===");
+    const mainNum = await question('Entrez le numéro principal (ex: 33612345678) : ');
+    const cleanMain = mainNum.replace(/[^0-9]/g, '');
+    if (cleanMain.length < 10) {
+        console.log("Numéro invalide.");
+        process.exit();
+    }
+    createBotInstance(cleanMain);
 }
 
 start();
