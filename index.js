@@ -20,10 +20,6 @@ const question = (text) => new Promise((resolve) => rl.question(text, resolve));
 // État global du bot
 let isBotActive = true;
 
-// Cache pour stocker temporairement les messages (pour l'anti-suppression)
-// On garde les 500 derniers messages en mémoire
-const messageDatabase = new Map();
-
 async function getGroqResponse(userMessage) {
     try {
         const completion = await groq.chat.completions.create({
@@ -71,35 +67,6 @@ async function startBot() {
         } else if (connection === 'open') { console.log('Bot Stone 2 connecté avec succès !'); }
     });
 
-    // --- LOGIQUE ANTI-SUPPRESSION (DÉTECTION) ---
-    sock.ev.on('messages.update', async (updates) => {
-        for (const update of updates) {
-            if (update.update.protocolMessage?.type === 0) { // Type 0 = Message supprimé
-                const deletedMsgId = update.update.protocolMessage.key.id;
-                const remoteJid = update.key.remoteJid;
-                
-                // On cherche le message original dans notre cache
-                const originalMsg = messageDatabase.get(deletedMsgId);
-                
-                if (originalMsg && isBotActive) {
-                    const participant = originalMsg.key.participant || originalMsg.key.remoteJid;
-                    const senderName = originalMsg.pushName || "Inconnu";
-                    
-                    await sock.sendMessage(remoteJid, { 
-                        text: `🛡️ *ANTI-SUPPRESSION DÉTECTÉ*\n\n👤 *Auteur :* ${senderName}\n📱 *Numéro :* @${participant.split('@')[0]}\n\n📜 *Message supprimé :*`,
-                        mentions: [participant]
-                    });
-
-                    // On renvoie le contenu original
-                    await sock.copyNForward(remoteJid, originalMsg, false);
-                    
-                    // Optionnel : supprimer du cache après récupération
-                    messageDatabase.delete(deletedMsgId);
-                }
-            }
-        }
-    });
-
     sock.ev.on('messages.upsert', async (m) => {
         const msg = m.messages[0];
         if (!msg.message) return;
@@ -108,21 +75,11 @@ async function startBot() {
         const isFromMe = msg.key.fromMe;
         const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").toLowerCase().trim();
 
-        // --- STOCKAGE DANS LE CACHE (Pour l'anti-suppression) ---
-        if (msg.key.id) {
-            messageDatabase.set(msg.key.id, msg);
-            // Limiter la taille du cache pour éviter de saturer la RAM
-            if (messageDatabase.size > 500) {
-                const firstKey = messageDatabase.keys().next().value;
-                messageDatabase.delete(firstKey);
-            }
-        }
-
         // --- COMMANDES DE CONTRÔLE (PROPRIÉTAIRE) ---
         if (isFromMe) {
             if (text === 'off') {
                 isBotActive = false;
-                await sock.sendMessage(remoteJid, { text: "Stone 2 est désactivé (IA + Anti-Suppression). 🛑" });
+                await sock.sendMessage(remoteJid, { text: "Stone 2 est désactivé. 🛑" });
                 return;
             }
             if (text === 'on') {
@@ -130,6 +87,52 @@ async function startBot() {
                 await sock.sendMessage(remoteJid, { text: "Stone 2 est activé. ✅" });
                 return;
             }
+        }
+
+        // --- FONCTIONNALITÉ STATUS SAVER (SAVE) ---
+        if (text === 'save' && isBotActive) {
+            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            
+            // On vérifie si le message cité vient d'un statut (status@broadcast)
+            const quotedRemoteJid = msg.message.extendedTextMessage?.contextInfo?.remoteJid;
+            const isStatus = quotedRemoteJid === 'status@broadcast';
+
+            if (!quoted) {
+                return sock.sendMessage(remoteJid, { text: "Répondez à un statut avec 'save' pour l'enregistrer." });
+            }
+
+            let type = Object.keys(quoted)[0];
+            
+            // Gestion des messages à vue unique si nécessaire
+            if (type === 'viewOnceMessageV2' || type === 'viewOnceMessage') {
+                type = Object.keys(quoted[type].message)[0];
+            }
+
+            if (type === 'imageMessage' || type === 'videoMessage') {
+                try {
+                    console.log(`[SAVE] Téléchargement du média (${type})...`);
+                    const buffer = await downloadMediaMessage(
+                        { message: quoted },
+                        'buffer',
+                        {},
+                        { logger: pino({ level: 'silent' }) }
+                    );
+
+                    const caption = isStatus ? "Stone 2 : Statut sauvegardé avec succès ! ✅" : "Stone 2 : Média sauvegardé ! ✅";
+
+                    if (type === 'imageMessage') {
+                        await sock.sendMessage(remoteJid, { image: buffer, caption: caption }, { quoted: msg });
+                    } else {
+                        await sock.sendMessage(remoteJid, { video: buffer, caption: caption }, { quoted: msg });
+                    }
+                } catch (e) {
+                    console.error("[SAVE ERROR]", e);
+                    await sock.sendMessage(remoteJid, { text: "Erreur lors de la sauvegarde du média." });
+                }
+            } else {
+                await sock.sendMessage(remoteJid, { text: "Le message cité n'est pas une image ou une vidéo." });
+            }
+            return;
         }
 
         // --- COMMANDE "VV" ---
@@ -158,7 +161,7 @@ async function startBot() {
         }
 
         // --- RÉPONSE IA ---
-        if (!isFromMe && isBotActive && text && text !== 'vv') {
+        if (!isFromMe && isBotActive && text && text !== 'vv' && text !== 'save') {
             const aiResponse = await getGroqResponse(text);
             await sock.sendMessage(remoteJid, { text: aiResponse });
         }
