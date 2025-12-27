@@ -37,12 +37,13 @@ async function getGroqResponse(userMessage) {
     } catch (error) { return "Cerveau indisponible."; }
 }
 
-async function createBotInstance(phoneNumber) {
-    // Nettoyer le numéro pour le nom du dossier
+async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify = null) {
     const cleanNumber = phoneNumber.replace(/[^0-9]/g, '');
-    console.log(`[SYSTÈME] Démarrage de la session pour : ${cleanNumber}`);
-    
     const sessionPath = path.join(SESSIONS_DIR, cleanNumber);
+    
+    // S'assurer que le dossier existe
+    if (!fs.existsSync(sessionPath)) fs.mkdirSync(sessionPath, { recursive: true });
+
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
     const { version } = await fetchLatestBaileysVersion();
 
@@ -58,13 +59,22 @@ async function createBotInstance(phoneNumber) {
 
     activeSessions.set(cleanNumber, { sock, isBotActive: true, activeSpams: new Set() });
 
-    // Demande de Pairing Code si non connecté
+    // Demande de Pairing Code
     if (!sock.authState.creds.registered) {
         setTimeout(async () => {
             try {
                 const code = await sock.requestPairingCode(cleanNumber);
+                const msg = `✅ *SESSION GÉNÉRÉE*\n\nNuméro : ${cleanNumber}\nCode : *${code}*\n\nCollez ce code dans votre WhatsApp.`;
+                
+                if (sockToNotify && jidToNotify) {
+                    await sockToNotify.sendMessage(jidToNotify, { text: msg });
+                }
                 console.log(`\n[CODE POUR ${cleanNumber}] : ${code}\n`);
-            } catch (e) { console.log(`[ERREUR CODE] ${cleanNumber}: ${e.message}`); }
+            } catch (e) {
+                if (sockToNotify && jidToNotify) {
+                    await sockToNotify.sendMessage(jidToNotify, { text: `❌ Erreur pour ${cleanNumber}: ${e.message}` });
+                }
+            }
         }, 3000);
     }
 
@@ -74,14 +84,10 @@ async function createBotInstance(phoneNumber) {
         const { connection, lastDisconnect } = update;
         if (connection === 'close') {
             const statusCode = (lastDisconnect.error instanceof Boom) ? lastDisconnect.error.output.statusCode : 0;
-            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-            
-            if (shouldReconnect) {
-                console.log(`[${cleanNumber}] Reconnexion dans 5s...`);
+            if (statusCode !== DisconnectReason.loggedOut) {
                 await sleep(5000);
                 createBotInstance(cleanNumber);
             } else {
-                console.log(`[${cleanNumber}] Déconnecté définitivement.`);
                 activeSessions.delete(cleanNumber);
             }
         } else if (connection === 'open') { 
@@ -98,11 +104,14 @@ async function createBotInstance(phoneNumber) {
         const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").trim();
         const lowerText = text.toLowerCase();
 
-        // --- COMMANDE CONNECT ---
-        if (lowerText === 'connect') {
-            const target = remoteJid.split('@')[0];
-            await sock.sendMessage(remoteJid, { text: `🔄 Génération du code pour le numéro ${target}...` });
-            createBotInstance(target);
+        // --- COMMANDE CONNECT [NUMÉRO] ---
+        if (lowerText.startsWith('connect ')) {
+            const target = text.split(' ')[1]?.replace(/[^0-9]/g, '');
+            if (!target || target.length < 10) {
+                return sock.sendMessage(remoteJid, { text: "Veuillez entrer un numéro valide après 'connect'." });
+            }
+            await sock.sendMessage(remoteJid, { text: `🔄 Création de la session pour ${target}...` });
+            createBotInstance(target, sock, remoteJid);
             return;
         }
 
@@ -126,8 +135,8 @@ async function createBotInstance(phoneNumber) {
         if (!current || !current.isBotActive) return;
 
         if (lowerText === 'menu') {
-            await sock.sendMessage(remoteJid, { text: "*STONE 2*\n- connect\n- save\n- vv\n- love\n- on/off" });
-        } else if (!isFromMe && !['save', 'vv', 'menu', 'connect'].includes(lowerText)) {
+            await sock.sendMessage(remoteJid, { text: "*STONE 2*\n- connect [numéro]\n- save\n- vv\n- love\n- on/off" });
+        } else if (!isFromMe && !['save', 'vv', 'menu'].includes(lowerText) && !lowerText.startsWith('connect ')) {
             const res = await getGroqResponse(text);
             await sock.sendMessage(remoteJid, { text: res });
         }
@@ -135,7 +144,7 @@ async function createBotInstance(phoneNumber) {
 }
 
 async function start() {
-    console.log("--- DÉMARRAGE STONE 2 (PAR NUMÉRO) ---");
+    console.log("--- DÉMARRAGE STONE 2 (CONNECT FIX) ---");
     const mainNum = await question('Veuillez entrer votre numéro principal (ex: 224620000000) : ');
     createBotInstance(mainNum.replace(/[^0-9]/g, ''));
 }
