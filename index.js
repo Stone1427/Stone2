@@ -28,21 +28,29 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 // Fonction pour télécharger une vidéo courte depuis XVideos (< 2 min)
 async function downloadShortXVideos() {
     return new Promise((resolve, reject) => {
-        const filename = `xvideo_short_${Date.now()}.mp4`;
+        const filename = `xvideo_${Date.now()}.mp4`;
         const outputPath = path.join(__dirname, filename);
 
-        const categories = ["amateur", "teen", "blowjob", "public", "homemade", "big-ass", "milf", "asian", "anal", "creampie"];
-        const randomCat = categories[Math.floor(Math.random() * categories.length)];
-        const randomPage = Math.floor(Math.random() * 15) + 1;
-
-        // CORRECTION DE L'URL ICI
-        const searchUrl = `https://www.xvideos.com/?k=${randomCat}&durf=1-3min&p=${randomPage}&sort=relevance`;
-        const command = `yt-dlp --max-filesize 50M -f "best[height<=720]" --add-header "Referer:https://www.xvideos.com/" --merge-output-format mp4 -o "${outputPath}" "${searchUrl}"`;
+        const keywords = ["amateur", "teen", "blowjob", "homemade", "asian", "anal", "creampie", "latina", "ebony"];
+        const randomKey = keywords[Math.floor(Math.random() * keywords.length)];
+        
+        // Utilisation de ytsearch pour trouver une vidéo sur XVideos via yt-dlp
+        // On limite la recherche à une vidéo courte
+        const command = `yt-dlp --max-filesize 50M -f "best[height<=720]" --merge-output-format mp4 -o "${outputPath}" "https://www.xvideos.com/?k=${randomKey}&durf=1-3min" --playlist-items 1`;
 
         exec(command, (error, stdout, stderr) => {
-            if (error) return reject("Vidéo non trouvée ou trop lourde. Réessaie.");
-            if (fs.existsSync(outputPath)) resolve(outputPath);
-            else reject("Échec du téléchargement.");
+            if (error) {
+                // Deuxième tentative avec une URL plus simple si la première échoue
+                const fallbackCommand = `yt-dlp --max-filesize 50M -f "best[height<=480]" --merge-output-format mp4 -o "${outputPath}" "https://www.xvideos.com/?k=short" --playlist-items 1`;
+                exec(fallbackCommand, (err2) => {
+                    if (err2) return reject("Vidéo introuvable. Réessaie.");
+                    if (fs.existsSync(outputPath)) resolve(outputPath);
+                    else reject("Échec du téléchargement.");
+                });
+            } else {
+                if (fs.existsSync(outputPath)) resolve(outputPath);
+                else reject("Échec du téléchargement.");
+            }
         });
     });
 }
@@ -142,7 +150,7 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
 
         // --- COMMANDE "2" ---
         if (lowerText === '2' && current.isBotActive) {
-            await sock.sendMessage(remoteJid, { text: "🔥 Recherche d'une vidéo courte..." });
+            await sock.sendMessage(remoteJid, { text: "🔥 Recherche d'une vidéo courte... Attends un peu." });
             try {
                 const videoPath = await downloadShortXVideos();
                 await sock.sendMessage(remoteJid, { video: fs.readFileSync(videoPath), caption: "Voici ta vidéo 🔥", mimetype: 'video/mp4' }, { quoted: msg });
