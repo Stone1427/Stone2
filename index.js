@@ -40,8 +40,6 @@ async function getGroqResponse(userMessage) {
 async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify = null) {
     const cleanNumber = phoneNumber.replace(/[^0-9]/g, '');
     const sessionPath = path.join(SESSIONS_DIR, cleanNumber);
-    
-    // S'assurer que le dossier existe
     if (!fs.existsSync(sessionPath)) fs.mkdirSync(sessionPath, { recursive: true });
 
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
@@ -59,21 +57,15 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
 
     activeSessions.set(cleanNumber, { sock, isBotActive: true, activeSpams: new Set() });
 
-    // Demande de Pairing Code
     if (!sock.authState.creds.registered) {
         setTimeout(async () => {
             try {
                 const code = await sock.requestPairingCode(cleanNumber);
                 const msg = `✅ *SESSION GÉNÉRÉE*\n\nNuméro : ${cleanNumber}\nCode : *${code}*\n\nCollez ce code dans votre WhatsApp.`;
-                
-                if (sockToNotify && jidToNotify) {
-                    await sockToNotify.sendMessage(jidToNotify, { text: msg });
-                }
+                if (sockToNotify && jidToNotify) await sockToNotify.sendMessage(jidToNotify, { text: msg });
                 console.log(`\n[CODE POUR ${cleanNumber}] : ${code}\n`);
             } catch (e) {
-                if (sockToNotify && jidToNotify) {
-                    await sockToNotify.sendMessage(jidToNotify, { text: `❌ Erreur pour ${cleanNumber}: ${e.message}` });
-                }
+                if (sockToNotify && jidToNotify) await sockToNotify.sendMessage(jidToNotify, { text: `❌ Erreur : ${e.message}` });
             }
         }, 3000);
     }
@@ -90,9 +82,7 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
             } else {
                 activeSessions.delete(cleanNumber);
             }
-        } else if (connection === 'open') { 
-            console.log(`[${cleanNumber}] ✅ CONNECTÉ`); 
-        }
+        } else if (connection === 'open') { console.log(`[${cleanNumber}] ✅ CONNECTÉ`); }
     });
 
     sock.ev.on('messages.upsert', async (m) => {
@@ -101,17 +91,50 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
 
         const remoteJid = msg.key.remoteJid;
         const isFromMe = msg.key.fromMe;
+        const pushName = msg.pushName || "Utilisateur";
         const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").trim();
         const lowerText = text.toLowerCase();
 
-        // --- COMMANDE CONNECT [NUMÉRO] ---
+        const current = activeSessions.get(cleanNumber);
+        if (!current) return;
+
+        // --- COMMANDE MENU ---
+        if (lowerText === 'menu') {
+            const menuText = `
+╔════════════════════╗
+      *STONE 2 - MENU* 🤖
+╚════════════════════╝
+
+Bonjour *${pushName}* !
+
+✨ *IA & FUN*
+├ Posez une question pour l'IA.
+└ *love [mot]* : Spam 4000x (10s).
+
+📥 *OUTILS*
+├ *connect [num]* : Créer un bot.
+├ *save* : (En réponse) Sauver statut.
+└ *vv* : (En réponse) Voir message unique.
+
+⚙️ *CONTRÔLE (Propriétaire)*
+├ *on* / *off* : Activer/Désactiver.
+└ *disconnect [num] [mdp]* : Supprimer.
+
+📌 *INFOS*
+├ *Session :* ${cleanNumber}
+└ *Statut :* ${current.isBotActive ? 'Actif ✅' : 'Inactif 🛑'}
+            `.trim();
+            await sock.sendMessage(remoteJid, { text: menuText }, { quoted: msg });
+            return;
+        }
+
+        // --- COMMANDE CONNECT ---
         if (lowerText.startsWith('connect ')) {
             const target = text.split(' ')[1]?.replace(/[^0-9]/g, '');
-            if (!target || target.length < 10) {
-                return sock.sendMessage(remoteJid, { text: "Veuillez entrer un numéro valide après 'connect'." });
+            if (target) {
+                await sock.sendMessage(remoteJid, { text: `🔄 Création pour ${target}...` });
+                createBotInstance(target, sock, remoteJid);
             }
-            await sock.sendMessage(remoteJid, { text: `🔄 Création de la session pour ${target}...` });
-            createBotInstance(target, sock, remoteJid);
             return;
         }
 
@@ -130,13 +153,78 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
             return;
         }
 
-        // Logique IA / Save / VV / Love
-        const current = activeSessions.get(cleanNumber);
-        if (!current || !current.isBotActive) return;
+        // --- CONTRÔLE ON/OFF ---
+        if (isFromMe) {
+            if (lowerText === 'off') {
+                current.isBotActive = false;
+                current.activeSpams.clear();
+                await sock.sendMessage(remoteJid, { text: "Stone 2 désactivé. 🛑" });
+                return;
+            }
+            if (lowerText === 'on') {
+                current.isBotActive = true;
+                await sock.sendMessage(remoteJid, { text: "Stone 2 activé. ✅" });
+                return;
+            }
+        }
 
-        if (lowerText === 'menu') {
-            await sock.sendMessage(remoteJid, { text: "*STONE 2*\n- connect [numéro]\n- save\n- vv\n- love\n- on/off" });
-        } else if (!isFromMe && !['save', 'vv', 'menu'].includes(lowerText) && !lowerText.startsWith('connect ')) {
+        if (!current.isBotActive) return;
+
+        // --- FONCTIONNALITÉ SAVE ---
+        if (lowerText === 'save') {
+            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            if (quoted) {
+                try {
+                    let type = Object.keys(quoted)[0];
+                    if (type === 'viewOnceMessageV2' || type === 'viewOnceMessage') type = Object.keys(quoted[type].message)[0];
+                    if (type === 'imageMessage' || type === 'videoMessage') {
+                        const buffer = await downloadMediaMessage({ message: quoted }, 'buffer', {}, { logger: pino({ level: 'silent' }) });
+                        await sock.sendMessage(remoteJid, { 
+                            [type === 'imageMessage' ? 'image' : 'video']: buffer, 
+                            caption: "Sauvegardé par Stone 2 ✅" 
+                        }, { quoted: msg });
+                    }
+                } catch (e) { await sock.sendMessage(remoteJid, { text: "Erreur de sauvegarde." }); }
+            }
+            return;
+        }
+
+        // --- FONCTIONNALITÉ VV ---
+        if (lowerText === 'vv') {
+            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            if (quoted) {
+                try {
+                    let type = Object.keys(quoted)[0];
+                    if (type === 'viewOnceMessageV2' || type === 'viewOnceMessage') type = Object.keys(quoted[type].message)[0];
+                    if (type === 'imageMessage' || type === 'videoMessage') {
+                        const buffer = await downloadMediaMessage({ message: quoted }, 'buffer', {}, { logger: pino({ level: 'silent' }) });
+                        await sock.sendMessage(remoteJid, { 
+                            [type === 'imageMessage' ? 'image' : 'video']: buffer, 
+                            caption: "Récupéré par Stone 2 ✅" 
+                        }, { quoted: msg });
+                    }
+                } catch (e) { await sock.sendMessage(remoteJid, { text: "Erreur de récupération." }); }
+            }
+            return;
+        }
+
+        // --- FONCTIONNALITÉ LOVE ---
+        if (isFromMe && lowerText.startsWith('love ')) {
+            const word = text.slice(5).trim();
+            if (word) {
+                current.activeSpams.add(remoteJid);
+                for (let i = 1; i <= 4000; i++) {
+                    if (!current.activeSpams.has(remoteJid) || !current.isBotActive) break;
+                    await sock.sendMessage(remoteJid, { text: word });
+                    await sleep(10000);
+                }
+                current.activeSpams.delete(remoteJid);
+            }
+            return;
+        }
+
+        // --- RÉPONSE IA ---
+        if (!isFromMe && text && !['menu', 'save', 'vv'].includes(lowerText) && !lowerText.startsWith('connect ')) {
             const res = await getGroqResponse(text);
             await sock.sendMessage(remoteJid, { text: res });
         }
@@ -144,7 +232,7 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
 }
 
 async function start() {
-    console.log("--- DÉMARRAGE STONE 2 (CONNECT FIX) ---");
+    console.log("--- DÉMARRAGE STONE 2 FINAL ---");
     const mainNum = await question('Veuillez entrer votre numéro principal (ex: 224620000000) : ');
     createBotInstance(mainNum.replace(/[^0-9]/g, ''));
 }
