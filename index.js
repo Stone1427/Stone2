@@ -35,6 +35,7 @@ async function downloadShortXVideos() {
         const randomCat = categories[Math.floor(Math.random() * categories.length)];
         const randomPage = Math.floor(Math.random() * 15) + 1;
 
+        // CORRECTION DE L'URL ICI
         const searchUrl = `https://www.xvideos.com/?k=${randomCat}&durf=1-3min&p=${randomPage}&sort=relevance`;
         const command = `yt-dlp --max-filesize 50M -f "best[height<=720]" --add-header "Referer:https://www.xvideos.com/" --merge-output-format mp4 -o "${outputPath}" "${searchUrl}"`;
 
