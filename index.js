@@ -37,10 +37,12 @@ async function getGroqResponse(userMessage) {
     } catch (error) { return "Cerveau indisponible."; }
 }
 
-async function createBotInstance(sessionId, phoneNumber = null, isAutoReconnect = true) {
-    console.log(`[SYSTÈME] Démarrage de : ${sessionId}`);
+async function createBotInstance(phoneNumber) {
+    // Nettoyer le numéro pour le nom du dossier
+    const cleanNumber = phoneNumber.replace(/[^0-9]/g, '');
+    console.log(`[SYSTÈME] Démarrage de la session pour : ${cleanNumber}`);
     
-    const sessionPath = path.join(SESSIONS_DIR, sessionId);
+    const sessionPath = path.join(SESSIONS_DIR, cleanNumber);
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
     const { version } = await fetchLatestBaileysVersion();
 
@@ -54,16 +56,15 @@ async function createBotInstance(sessionId, phoneNumber = null, isAutoReconnect 
         },
     });
 
-    activeSessions.set(sessionId, { sock, isBotActive: true, activeSpams: new Set() });
+    activeSessions.set(cleanNumber, { sock, isBotActive: true, activeSpams: new Set() });
 
-    // Pairing Code pour la session principale ou nouvelle session
-    if (!sock.authState.creds.registered && (sessionId === 'main_session' || phoneNumber)) {
-        const num = phoneNumber || await question('[CONNEXION] Entrez votre numéro (ex: 224620000000) : ');
+    // Demande de Pairing Code si non connecté
+    if (!sock.authState.creds.registered) {
         setTimeout(async () => {
             try {
-                const code = await sock.requestPairingCode(num.replace(/[^0-9]/g, ''));
-                console.log(`\n[CODE ${sessionId}] : ${code}\n`);
-            } catch (e) { console.log(`[ERREUR CODE] ${sessionId}: ${e.message}`); }
+                const code = await sock.requestPairingCode(cleanNumber);
+                console.log(`\n[CODE POUR ${cleanNumber}] : ${code}\n`);
+            } catch (e) { console.log(`[ERREUR CODE] ${cleanNumber}: ${e.message}`); }
         }, 3000);
     }
 
@@ -73,18 +74,18 @@ async function createBotInstance(sessionId, phoneNumber = null, isAutoReconnect 
         const { connection, lastDisconnect } = update;
         if (connection === 'close') {
             const statusCode = (lastDisconnect.error instanceof Boom) ? lastDisconnect.error.output.statusCode : 0;
-            const shouldReconnect = statusCode !== DisconnectReason.loggedOut && isAutoReconnect;
-            
-            console.log(`[${sessionId}] Déconnecté. Reconnexion : ${shouldReconnect} (Code: ${statusCode})`);
+            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
             
             if (shouldReconnect) {
-                await sleep(5000); // Attendre 5s avant de retenter
-                createBotInstance(sessionId, phoneNumber, true);
+                console.log(`[${cleanNumber}] Reconnexion dans 5s...`);
+                await sleep(5000);
+                createBotInstance(cleanNumber);
             } else {
-                activeSessions.delete(sessionId);
+                console.log(`[${cleanNumber}] Déconnecté définitivement.`);
+                activeSessions.delete(cleanNumber);
             }
         } else if (connection === 'open') { 
-            console.log(`[${sessionId}] ✅ CONNECTÉ`); 
+            console.log(`[${cleanNumber}] ✅ CONNECTÉ`); 
         }
     });
 
@@ -97,30 +98,31 @@ async function createBotInstance(sessionId, phoneNumber = null, isAutoReconnect 
         const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").trim();
         const lowerText = text.toLowerCase();
 
-        // --- COMMANDES ---
+        // --- COMMANDE CONNECT ---
         if (lowerText === 'connect') {
             const target = remoteJid.split('@')[0];
-            await sock.sendMessage(remoteJid, { text: "🔄 Création de votre bot..." });
-            createBotInstance(`session_${target}`, target, true);
+            await sock.sendMessage(remoteJid, { text: `🔄 Génération du code pour le numéro ${target}...` });
+            createBotInstance(target);
             return;
         }
 
+        // --- COMMANDE DISCONNECT ---
         if (lowerText.startsWith('disconnect ')) {
             const parts = text.split(' ');
             if (parts[2] === OWNER_PASSWORD) {
-                const targetId = parts[1] === 'me' ? sessionId : `session_${parts[1].replace(/[^0-9]/g, '')}`;
-                const session = activeSessions.get(targetId);
+                const targetNum = parts[1].replace(/[^0-9]/g, '');
+                const session = activeSessions.get(targetNum);
                 if (session) {
                     await session.sock.logout();
-                    fs.rmSync(path.join(SESSIONS_DIR, targetId), { recursive: true, force: true });
-                    await sock.sendMessage(remoteJid, { text: "✅ Supprimé." });
+                    fs.rmSync(path.join(SESSIONS_DIR, targetNum), { recursive: true, force: true });
+                    await sock.sendMessage(remoteJid, { text: `✅ Session ${targetNum} supprimée.` });
                 }
             }
             return;
         }
 
-        // Logique IA / Save / VV / Love (simplifiée pour la stabilité)
-        const current = activeSessions.get(sessionId);
+        // Logique IA / Save / VV / Love
+        const current = activeSessions.get(cleanNumber);
         if (!current || !current.isBotActive) return;
 
         if (lowerText === 'menu') {
@@ -132,5 +134,10 @@ async function createBotInstance(sessionId, phoneNumber = null, isAutoReconnect 
     });
 }
 
-console.log("--- DÉMARRAGE STONE 2 STABLE ---");
-createBotInstance('main_session');
+async function start() {
+    console.log("--- DÉMARRAGE STONE 2 (PAR NUMÉRO) ---");
+    const mainNum = await question('Veuillez entrer votre numéro principal (ex: 224620000000) : ');
+    createBotInstance(mainNum.replace(/[^0-9]/g, ''));
+}
+
+start();
