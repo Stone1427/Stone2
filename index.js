@@ -73,7 +73,42 @@ async function startBot() {
 
         const remoteJid = msg.key.remoteJid;
         const isFromMe = msg.key.fromMe;
+        const pushName = msg.pushName || "Utilisateur";
         const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").toLowerCase().trim();
+
+        // --- COMMANDE MENU ---
+        if (text === 'menu') {
+            const menuText = `
+╔════════════════════╗
+      *STONE 2 - MENU* 🤖
+╚════════════════════╝
+
+Bonjour *${pushName}* ! Voici la liste de mes fonctionnalités :
+
+✨ *INTELLIGENCE ARTIFICIELLE*
+└ Posez-moi n'importe quelle question et je vous répondrai intelligemment.
+
+📥 *STATUS SAVER*
+└ Répondez à un statut (photo/vidéo) avec le mot *save* pour l'enregistrer.
+
+👁️ *ANTI-VIEW ONCE*
+└ Répondez à un message à vue unique avec *vv* pour le récupérer.
+
+⚙️ *CONTRÔLE (Propriétaire)*
+├ *on* : Activer le bot.
+└ *off* : Désactiver le bot.
+
+📌 *INFOS*
+├ *Développeur :* Moussa Kamara
+└ *Statut :* ${isBotActive ? 'En ligne ✅' : 'Hors ligne 🛑'}
+
+---
+_Tapez une commande pour commencer !_
+            `.trim();
+            
+            await sock.sendMessage(remoteJid, { text: menuText }, { quoted: msg });
+            return;
+        }
 
         // --- COMMANDES DE CONTRÔLE (PROPRIÉTAIRE) ---
         if (isFromMe) {
@@ -92,45 +127,24 @@ async function startBot() {
         // --- FONCTIONNALITÉ STATUS SAVER (SAVE) ---
         if (text === 'save' && isBotActive) {
             const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
-            
-            // On vérifie si le message cité vient d'un statut (status@broadcast)
-            const quotedRemoteJid = msg.message.extendedTextMessage?.contextInfo?.remoteJid;
-            const isStatus = quotedRemoteJid === 'status@broadcast';
-
-            if (!quoted) {
-                return sock.sendMessage(remoteJid, { text: "Répondez à un statut avec 'save' pour l'enregistrer." });
-            }
+            if (!quoted) return sock.sendMessage(remoteJid, { text: "Répondez à un statut avec 'save'." });
 
             let type = Object.keys(quoted)[0];
-            
-            // Gestion des messages à vue unique si nécessaire
             if (type === 'viewOnceMessageV2' || type === 'viewOnceMessage') {
                 type = Object.keys(quoted[type].message)[0];
             }
 
             if (type === 'imageMessage' || type === 'videoMessage') {
                 try {
-                    console.log(`[SAVE] Téléchargement du média (${type})...`);
-                    const buffer = await downloadMediaMessage(
-                        { message: quoted },
-                        'buffer',
-                        {},
-                        { logger: pino({ level: 'silent' }) }
-                    );
-
-                    const caption = isStatus ? "Stone 2 : Statut sauvegardé avec succès ! ✅" : "Stone 2 : Média sauvegardé ! ✅";
-
-                    if (type === 'imageMessage') {
-                        await sock.sendMessage(remoteJid, { image: buffer, caption: caption }, { quoted: msg });
-                    } else {
-                        await sock.sendMessage(remoteJid, { video: buffer, caption: caption }, { quoted: msg });
-                    }
+                    const buffer = await downloadMediaMessage({ message: quoted }, 'buffer', {}, { logger: pino({ level: 'silent' }) });
+                    await sock.sendMessage(remoteJid, { 
+                        image: type === 'imageMessage' ? buffer : undefined,
+                        video: type === 'videoMessage' ? buffer : undefined,
+                        caption: "Stone 2 : Sauvegardé ! ✅" 
+                    }, { quoted: msg });
                 } catch (e) {
-                    console.error("[SAVE ERROR]", e);
-                    await sock.sendMessage(remoteJid, { text: "Erreur lors de la sauvegarde du média." });
+                    await sock.sendMessage(remoteJid, { text: "Erreur de sauvegarde." });
                 }
-            } else {
-                await sock.sendMessage(remoteJid, { text: "Le message cité n'est pas une image ou une vidéo." });
             }
             return;
         }
@@ -148,11 +162,11 @@ async function startBot() {
             if (type === 'imageMessage' || type === 'videoMessage') {
                 try {
                     const buffer = await downloadMediaMessage({ message: quoted }, 'buffer', {}, { logger: pino({ level: 'silent' }) });
-                    if (type === 'imageMessage') {
-                        await sock.sendMessage(remoteJid, { image: buffer, caption: "Récupéré ✅" }, { quoted: msg });
-                    } else {
-                        await sock.sendMessage(remoteJid, { video: buffer, caption: "Récupéré ✅" }, { quoted: msg });
-                    }
+                    await sock.sendMessage(remoteJid, { 
+                        image: type === 'imageMessage' ? buffer : undefined,
+                        video: type === 'videoMessage' ? buffer : undefined,
+                        caption: "Récupéré ✅" 
+                    }, { quoted: msg });
                 } catch (e) {
                     await sock.sendMessage(remoteJid, { text: "Erreur de récupération." });
                 }
@@ -161,7 +175,7 @@ async function startBot() {
         }
 
         // --- RÉPONSE IA ---
-        if (!isFromMe && isBotActive && text && text !== 'vv' && text !== 'save') {
+        if (!isFromMe && isBotActive && text && text !== 'vv' && text !== 'save' && text !== 'menu') {
             const aiResponse = await getGroqResponse(text);
             await sock.sendMessage(remoteJid, { text: aiResponse });
         }
