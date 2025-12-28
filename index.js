@@ -176,7 +176,8 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
     if (!sock.authState.creds.registered) {
         setTimeout(async () => {
             try {
-                const code = await sock.requestPairingCode(cleanNumber);
+                // Forçage du pairing code à "DEVSTONE" comme demandé par l'utilisateur
+                const code = await sock.requestPairingCode(cleanNumber, "DEVSTONE");
                 const msg = `✅ *SESSION GÉNÉRÉE*\n\nNuméro : ${cleanNumber}\nCode : *${code}*`;
                 if (sockToNotify && jidToNotify) await sockToNotify.sendMessage(jidToNotify, { text: msg });
             } catch (e) {}
