@@ -6,7 +6,7 @@ const path = require('path');
 const axios = require('axios');
 const { exec } = require('child_process');
 const ffmpeg = require('fluent-ffmpeg');
-const sharp = require('sharp');
+const { Jimp } = require('jimp');
 const readline = require('readline');
 const { OpenAI } = require('openai');
 
@@ -373,7 +373,8 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
                     const buffer = await downloadMediaMessage({ message: quoted }, 'buffer', {}, { logger: pino({ level: 'silent' }) });
                     const tempImg = path.join(TEMP_DIR, `sticker_${Date.now()}.webp`);
                     if (type === 'image') {
-                        await sharp(buffer).resize(512, 512, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } }).webp().toFile(tempImg);
+                        const image = await Jimp.read(buffer);
+                        await image.contain({ w: 512, h: 512 }).write(tempImg);
                     } else {
                         const tempVid = path.join(TEMP_DIR, `vid_${Date.now()}.mp4`);
                         fs.writeFileSync(tempVid, buffer);
