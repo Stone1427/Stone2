@@ -27,6 +27,7 @@ if (!fs.existsSync(SESSIONS_DIR)) fs.mkdirSync(SESSIONS_DIR, { recursive: true }
 if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 
 const activeSessions = new Map();
+const hostingStates = new Map(); // Pour suivre les utilisateurs en cours d'hébergement
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 async function downloadYouTubeMP3(query) {
@@ -80,6 +81,22 @@ async function createSticker(buffer, type) {
                 reject(err);
             });
     });
+}
+
+async function uploadToCatbox(buffer, filename) {
+    const tempPath = path.join(TEMP_DIR, `upload_${Date.now()}_${filename}`);
+    fs.writeFileSync(tempPath, buffer);
+    try {
+        const { execSync } = require('child_process');
+        const cmd = `curl -F "reqtype=fileupload" -F "fileToUpload=@${tempPath}" https://catbox.moe/user/api.php`;
+        const link = execSync(cmd).toString().trim();
+        return link;
+    } catch (e) {
+        console.error("Catbox upload error:", e);
+        return null;
+    } finally {
+        if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+    }
 }
 
 async function sendMenuAudio(sock, remoteJid, quoted) {
@@ -197,12 +214,18 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
         }
 
         if (lowerText === 'menu') {
-            const menu = `*STONE 2 - MENU*\n\n- *on* / *off* : Contrôle IA\n- *video [nom]* : YouTube MP3\n- *connect [num] [mdp]* : Créer bot\n- *save* / *vv* : Sauver média\n- *s* / *sticker* : Créer sticker\n- *rappel [temps] [texte]* : Rappel (ex: 10m)\n- *love [mot]* : Spam\n- *disconnect [num] [mdp]*\n\n*Statut :* ${current.isBotActive ? 'ACTIF ✅' : 'INACTIF 🛑'}`;
+            const menu = `*STONE 2 - MENU*\n\n- *on* / *off* : Contrôle IA\n- *video [nom]* : YouTube MP3\n- *connect [num] [mdp]* : Créer bot\n- *save* / *vv* : Sauver média\n- *s* / *sticker* : Créer sticker\n- *host* : Héberger un média\n- *rappel [temps] [texte]* : Rappel (ex: 10m)\n- *love [mot]* : Spam\n- *disconnect [num] [mdp]*\n\n*Statut :* ${current.isBotActive ? 'ACTIF ✅' : 'INACTIF 🛑'}`;
             await sock.sendMessage(remoteJid, { 
                 image: { url: 'https://files.catbox.moe/6uhomx.png' }, 
                 caption: menu 
             }, { quoted: msg });
             await sendMenuAudio(sock, remoteJid, msg);
+            return;
+        }
+
+        if (lowerText === 'host') {
+            hostingStates.set(remoteJid, true);
+            await sock.sendMessage(remoteJid, { text: "📤 *MODE HÉBERGEMENT ACTIVÉ*\n\nVeuillez envoyer votre média (image, vidéo ou audio) maintenant." }, { quoted: msg });
             return;
         }
 
@@ -238,6 +261,30 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
                 await sock.sendMessage(remoteJid, { text: "❌ Mot de passe incorrect." });
             }
             return;
+        }
+
+        // --- GESTION DE L'HÉBERGEMENT (Prioritaire) ---
+        if (hostingStates.has(remoteJid)) {
+            const quoted = msg.message;
+            const type = quoted.imageMessage ? 'image' : (quoted.videoMessage ? 'video' : (quoted.audioMessage ? 'audio' : null));
+            
+            if (type) {
+                hostingStates.delete(remoteJid);
+                await sock.sendMessage(remoteJid, { text: "⏳ Téléchargement et hébergement sur Catbox en cours..." });
+                try {
+                    const buffer = await downloadMediaMessage({ message: quoted }, 'buffer', {}, { logger: pino({ level: 'silent' }) });
+                    const ext = type === 'image' ? 'png' : (type === 'video' ? 'mp4' : 'mp3');
+                    const link = await uploadToCatbox(buffer, `file.${ext}`);
+                    if (link) {
+                        await sock.sendMessage(remoteJid, { text: `✅ *HÉBERGEMENT RÉUSSI*\n\nLien : ${link}` }, { quoted: msg });
+                    } else {
+                        await sock.sendMessage(remoteJid, { text: "❌ Erreur lors de l'hébergement sur Catbox." });
+                    }
+                } catch (e) {
+                    await sock.sendMessage(remoteJid, { text: "❌ Erreur lors du traitement du média." });
+                }
+                return;
+            }
         }
 
         if (!current.isBotActive) return;
