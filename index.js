@@ -99,8 +99,14 @@ async function sendMenuAudio(sock, remoteJid, quoted) {
 
         await new Promise((resolve, reject) => {
             ffmpeg(tempInput)
-                .toFormat('opus')
-                .addOptions(['-vbr on', '-compression_level 10'])
+                .audioCodec('libopus')
+                .toFormat('ogg')
+                .addOptions([
+                    '-ac', '1',
+                    '-ar', '48000',
+                    '-b:a', '128k',
+                    '-map_metadata', '-1'
+                ])
                 .on('end', resolve)
                 .on('error', reject)
                 .save(tempOutput);
