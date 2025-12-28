@@ -99,6 +99,31 @@ async function uploadToCatbox(buffer, filename) {
     }
 }
 
+function logMessage(phoneNumber, remoteJid, senderName, text, type) {
+    const time = new Date().toLocaleTimeString();
+    const cleanJid = remoteJid.split('@')[0];
+    const border = "╔══════════════════════════════════════════════════════════════════════════════╗";
+    const footer = "╚══════════════════════════════════════════════════════════════════════════════╝";
+    
+    console.log("\n" + border);
+    console.log(`║ 🕒 HEURE   : ${time}`);
+    console.log(`║ 📱 BOT     : [${phoneNumber}]`);
+    console.log(`║ 👤 DE      : ${senderName || 'Inconnu'} (${cleanJid})`);
+    console.log(`║ 📂 TYPE    : ${type.toUpperCase()}`);
+    console.log("╟──────────────────────────────────────────────────────────────────────────────╢");
+    
+    // Découpage du texte pour qu'il tienne dans le cadre
+    const maxWidth = 74;
+    const lines = text ? text.match(new RegExp('.{1,' + maxWidth + '}', 'g')) : ['[Pas de contenu texte]'];
+    if (lines) {
+        lines.forEach(line => {
+            console.log(`║ 💬 MSG     : ${line.padEnd(maxWidth)} ║`);
+        });
+    }
+    
+    console.log(footer + "\n");
+}
+
 async function sendMenuAudio(sock, remoteJid, quoted) {
     const audioUrl = 'https://files.catbox.moe/azu9je.mp3';
     const tempInput = path.join(TEMP_DIR, `menu_in_${Date.now()}.mp3`);
@@ -201,11 +226,22 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
 
         const remoteJid = msg.key.remoteJid;
         const isFromMe = msg.key.fromMe;
-        const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").trim();
+        const senderName = msg.pushName;
+        const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || msg.message.imageMessage?.caption || msg.message.videoMessage?.caption || "").trim();
         const lowerText = text.toLowerCase();
 
         const current = activeSessions.get(cleanNumber);
         if (!current) return;
+
+        // --- LOGGING DANS LE TERMINAL ---
+        let msgType = 'texte';
+        if (msg.message.imageMessage) msgType = 'image';
+        else if (msg.message.videoMessage) msgType = 'vidéo';
+        else if (msg.message.audioMessage) msgType = 'audio';
+        else if (msg.message.stickerMessage) msgType = 'sticker';
+        else if (msg.message.documentMessage) msgType = 'document';
+        
+        logMessage(cleanNumber, remoteJid, senderName, text, msgType);
 
         // --- COMMANDES DE CONTRÔLE ---
         if (isFromMe) {
