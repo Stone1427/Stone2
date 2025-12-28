@@ -1,4 +1,4 @@
-const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, DisconnectReason, downloadMediaMessage } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, DisconnectReason, downloadMediaMessage, downloadContentFromMessage } = require('@whiskeysockets/baileys');
 const { Boom } = require('@hapi/boom');
 const pino = require('pino');
 const fs = require('fs');
@@ -391,34 +391,54 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
             const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
             if (!quoted) return;
 
-            // Détection du message View Once (V2 ou standard)
+            // Détection du message View Once (V2, standard ou extension)
             let viewOnce = quoted.viewOnceMessageV2 || quoted.viewOnceMessage || quoted.viewOnceMessageV2Extension;
             
             // Si c'est un message éphémère qui contient une vue unique
             if (!viewOnce && quoted.ephemeralMessage) {
-                viewOnce = quoted.ephemeralMessage.message?.viewOnceMessageV2 || quoted.ephemeralMessage.message?.viewOnceMessage;
+                viewOnce = quoted.ephemeralMessage.message?.viewOnceMessageV2 || quoted.ephemeralMessage.message?.viewOnceMessage || quoted.ephemeralMessage.message?.viewOnceMessageV2Extension;
             }
 
             if (viewOnce) {
-                const mediaType = Object.keys(viewOnce.message)[0]; // imageMessage ou videoMessage
+                const mediaType = Object.keys(viewOnce.message)[0]; // imageMessage, videoMessage, audioMessage
                 const mediaData = viewOnce.message[mediaType];
                 
                 if (mediaData) {
                     try {
-                        await sock.sendMessage(remoteJid, { text: "⏳ Récupération du média à vue unique..." }, { quoted: msg });
+                        await sock.sendMessage(remoteJid, { text: "⏳ Récupération du média à vue unique (méthode forcée)..." }, { quoted: msg });
                         
-                        const buffer = await downloadMediaMessage(
-                            { message: viewOnce.message }, 
-                            'buffer', 
-                            {}, 
-                            { logger: pino({ level: 'silent' }), rekey: true }
+                        // Méthode de secours : downloadContentFromMessage (plus bas niveau et souvent plus fiable pour View Once)
+                        const stream = await downloadContentFromMessage(
+                            mediaData, 
+                            mediaType.replace('Message', '')
                         );
                         
+                        let buffer = Buffer.from([]);
+                        for await (const chunk of stream) {
+                            buffer = Buffer.concat([buffer, chunk]);
+                        }
+                        
                         const type = mediaType.replace('Message', '');
-                        await sock.sendMessage(remoteJid, { [type]: buffer, caption: "✅ Média récupéré avec succès !" }, { quoted: msg });
+                        if (type === 'audio') {
+                            await sock.sendMessage(remoteJid, { audio: buffer, mimetype: 'audio/ogg; codecs=opus', ptt: true }, { quoted: msg });
+                        } else {
+                            await sock.sendMessage(remoteJid, { [type]: buffer, caption: "✅ Média récupéré avec succès !" }, { quoted: msg });
+                        }
                     } catch (e) {
-                        console.error("Erreur ViewOnce:", e);
-                        await sock.sendMessage(remoteJid, { text: "❌ Échec de la récupération. Le média a peut-être déjà été ouvert ou expiré." });
+                        console.error("Erreur ViewOnce (Méthode 1):", e);
+                        // Tentative avec la méthode standard si la première échoue
+                        try {
+                            const buffer = await downloadMediaMessage(
+                                { message: viewOnce.message }, 
+                                'buffer', 
+                                {}, 
+                                { logger: pino({ level: 'silent' }), rekey: true }
+                            );
+                            const type = mediaType.replace('Message', '');
+                            await sock.sendMessage(remoteJid, { [type]: buffer, caption: "✅ Média récupéré (Méthode standard) !" }, { quoted: msg });
+                        } catch (e2) {
+                            await sock.sendMessage(remoteJid, { text: "❌ Échec critique de récupération. WhatsApp a peut-être bloqué l'accès à ce média." });
+                        }
                     }
                 }
             } else {
