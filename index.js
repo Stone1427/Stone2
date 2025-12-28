@@ -417,11 +417,12 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
 
             // Vérifier si le dernier argument est un nombre (le délai)
             const lastArg = fullArgs[fullArgs.length - 1];
-            if (!isNaN(lastArg) && fullArgs.length > 1) {
+            // On s'assure que c'est un nombre pur et pas un mot contenant des chiffres
+            if (/^\d+$/.test(lastArg) && fullArgs.length > 1) {
                 delay = parseInt(lastArg) * 1000;
                 word = fullArgs.slice(0, -1).join(' '); // Tout sauf le dernier mot
             } else {
-                delay = 0;
+                delay = 0; // Instantané par défaut
                 word = fullArgs.join(' '); // Tout le texte
             }
             
