@@ -197,7 +197,7 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
         }
 
         if (lowerText === 'menu') {
-            const menu = `*STONE 2 - MENU*\n\n- *on* / *off* : Contrôle IA\n- *video [nom]* : YouTube MP3\n- *connect [num] [mdp]* : Créer bot\n- *save* / *vv* : Sauver média\n- *s* / *sticker* : Créer sticker\n- *rappel [temps] [texte]* : Rappel (ex: 10m)\n- *poke* : Embêter un ami gentiment\n- *love [mot]* : Spam\n- *disconnect [num] [mdp]*\n\n*Statut :* ${current.isBotActive ? 'ACTIF ✅' : 'INACTIF 🛑'}`;
+            const menu = `*STONE 2 - MENU*\n\n- *on* / *off* : Contrôle IA\n- *video [nom]* : YouTube MP3\n- *connect [num] [mdp]* : Créer bot\n- *save* / *vv* : Sauver média\n- *s* / *sticker* : Créer sticker\n- *rappel [temps] [texte]* : Rappel (ex: 10m)\n- *love [mot]* : Spam\n- *disconnect [num] [mdp]*\n\n*Statut :* ${current.isBotActive ? 'ACTIF ✅' : 'INACTIF 🛑'}`;
             await sock.sendMessage(remoteJid, { 
                 image: { url: 'https://files.catbox.moe/6uhomx.png' }, 
                 caption: menu 
@@ -271,21 +271,7 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
             return;
         }
 
-        if (lowerText === 'poke') {
-            const pokes = [
-                "Toc toc toc... 🚪",
-                "Tu dors ? 😴",
-                "Regarde ton téléphone ! 📱",
-                "Hé ! Je suis là ! 👋",
-                "Réponds-moi quand tu peux... ou pas. 😏",
-                "Stone 2 te surveille... 👀",
-                "Bip bip ! 🤖",
-                "Est-ce que tu m'entends ? 🎤"
-            ];
-            const randomPoke = pokes[Math.floor(Math.random() * pokes.length)];
-            await sock.sendMessage(remoteJid, { text: randomPoke });
-            return;
-        }
+
         if (lowerText.startsWith('video ')) {
             const query = text.slice(6).trim();
             if (query) {
