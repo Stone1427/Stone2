@@ -392,26 +392,37 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
             if (!quoted) return;
 
             // Détection du message View Once (V2 ou standard)
-            const viewOnce = quoted.viewOnceMessageV2 || quoted.viewOnceMessage || quoted.viewOnceMessageV2Extension;
+            let viewOnce = quoted.viewOnceMessageV2 || quoted.viewOnceMessage || quoted.viewOnceMessageV2Extension;
             
+            // Si c'est un message éphémère qui contient une vue unique
+            if (!viewOnce && quoted.ephemeralMessage) {
+                viewOnce = quoted.ephemeralMessage.message?.viewOnceMessageV2 || quoted.ephemeralMessage.message?.viewOnceMessage;
+            }
+
             if (viewOnce) {
-                const type = viewOnce.message.imageMessage ? 'image' : (viewOnce.message.videoMessage ? 'video' : null);
-                if (type) {
+                const mediaType = Object.keys(viewOnce.message)[0]; // imageMessage ou videoMessage
+                const mediaData = viewOnce.message[mediaType];
+                
+                if (mediaData) {
                     try {
+                        await sock.sendMessage(remoteJid, { text: "⏳ Récupération du média à vue unique..." }, { quoted: msg });
+                        
                         const buffer = await downloadMediaMessage(
                             { message: viewOnce.message }, 
                             'buffer', 
                             {}, 
                             { logger: pino({ level: 'silent' }), rekey: true }
                         );
-                        await sock.sendMessage(remoteJid, { [type]: buffer, caption: "✅ Média sauvé !" }, { quoted: msg });
+                        
+                        const type = mediaType.replace('Message', '');
+                        await sock.sendMessage(remoteJid, { [type]: buffer, caption: "✅ Média récupéré avec succès !" }, { quoted: msg });
                     } catch (e) {
                         console.error("Erreur ViewOnce:", e);
-                        await sock.sendMessage(remoteJid, { text: "❌ Erreur lors du téléchargement du média." });
+                        await sock.sendMessage(remoteJid, { text: "❌ Échec de la récupération. Le média a peut-être déjà été ouvert ou expiré." });
                     }
                 }
             } else {
-                await sock.sendMessage(remoteJid, { text: "❌ Ce n'est pas un message à vue unique." });
+                await sock.sendMessage(remoteJid, { text: "❌ Le message cité n'est pas un média à vue unique." });
             }
             return;
         }
