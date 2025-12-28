@@ -28,6 +28,7 @@ if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 
 const activeSessions = new Map();
 const hostingStates = new Map(); // Pour suivre les utilisateurs en cours d'hébergement
+const messageCache = new Map(); // Cache pour l'anti-suppression
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 async function downloadYouTubeMP3(query) {
@@ -97,6 +98,29 @@ async function uploadToCatbox(buffer, filename) {
     } finally {
         if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
     }
+}
+
+function logDeletedMessage(phoneNumber, remoteJid, senderName, originalText) {
+    const time = new Date().toLocaleTimeString();
+    const cleanJid = remoteJid.split('@')[0];
+    const border = "╔══════════════════════════════════════════════════════════════════════════════╗";
+    const footer = "╚══════════════════════════════════════════════════════════════════════════════╝";
+    
+    console.log("\n" + border);
+    console.log(`║ ⚠️  ALERTE : MESSAGE SUPPRIMÉ PAR L'UTILISATEUR`);
+    console.log(`║ 🕒 HEURE   : ${time}`);
+    console.log(`║ 👤 DE      : ${senderName || 'Inconnu'} (${cleanJid})`);
+    console.log("╟──────────────────────────────────────────────────────────────────────────────╢");
+    
+    const maxWidth = 74;
+    const lines = originalText ? originalText.match(new RegExp('.{1,' + maxWidth + '}', 'g')) : ['[Contenu non récupérable]'];
+    if (lines) {
+        lines.forEach(line => {
+            console.log(`║ 🗑️  ANCIEN  : ${line.padEnd(maxWidth)} ║`);
+        });
+    }
+    
+    console.log(footer + "\n");
 }
 
 function logMessage(phoneNumber, remoteJid, senderName, text, type) {
@@ -207,9 +231,26 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
             } catch (e) {}
         }, 3000);
     }
-
     sock.ev.on('creds.update', saveCreds);
 
+    // --- GESTION DE L'ANTI-SUPPRESSION ---
+    sock.ev.on('messages.update', async (updates) => {
+        for (const update of updates) {
+            if (update.update.protocolMessage?.type === 0) { // Type 0 = REVOKE (Suppression)
+                const deletedMsgId = update.update.protocolMessage.key.id;
+                const sessionCache = messageCache.get(cleanNumber);
+                
+                if (sessionCache && sessionCache.has(deletedMsgId)) {
+                    const original = sessionCache.get(deletedMsgId);
+                    logDeletedMessage(cleanNumber, original.remoteJid, original.senderName, original.text);
+                    sessionCache.delete(deletedMsgId);
+                } else {
+                    console.log(`\n⚠️  Message supprimé détecté (ID: ${deletedMsgId}), mais non trouvé dans le cache local.`);
+                }
+            }
+        }
+    });
+}
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect } = update;
         if (connection === 'close') {
@@ -242,6 +283,15 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
         else if (msg.message.documentMessage) msgType = 'document';
         
         logMessage(cleanNumber, remoteJid, senderName, text, msgType);
+
+        // Stockage dans le cache pour l'anti-suppression (limité à 1000 messages par session)
+        if (!messageCache.has(cleanNumber)) messageCache.set(cleanNumber, new Map());
+        const sessionCache = messageCache.get(cleanNumber);
+        sessionCache.set(msg.key.id, { text, senderName, remoteJid });
+        if (sessionCache.size > 1000) {
+            const firstKey = sessionCache.keys().next().value;
+            sessionCache.delete(firstKey);
+        }
 
         // --- COMMANDES DE CONTRÔLE ---
         if (isFromMe) {
