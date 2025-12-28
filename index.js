@@ -412,13 +412,22 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
         }
 
         if (isFromMe && lowerText.startsWith('love ')) {
-            const args = text.slice(5).trim().split(' ');
-            const word = args[0];
-            const delay = args[1] ? parseInt(args[1]) * 1000 : 0; // Délai en ms, 0 par défaut
+            const fullArgs = text.slice(5).trim().split(' ');
+            let word, delay;
+
+            // Vérifier si le dernier argument est un nombre (le délai)
+            const lastArg = fullArgs[fullArgs.length - 1];
+            if (!isNaN(lastArg) && fullArgs.length > 1) {
+                delay = parseInt(lastArg) * 1000;
+                word = fullArgs.slice(0, -1).join(' '); // Tout sauf le dernier mot
+            } else {
+                delay = 0;
+                word = fullArgs.join(' '); // Tout le texte
+            }
             
             if (word) {
                 current.activeSpams.add(remoteJid);
-                await sock.sendMessage(remoteJid, { text: `🚀 *SPAM ACTIVÉ*\nMot: ${word}\nDélai: ${delay/1000}s` });
+                await sock.sendMessage(remoteJid, { text: `🚀 *SPAM ACTIVÉ*\nMessage: ${word}\nDélai: ${delay/1000}s` });
                 
                 for (let i = 1; i <= 4000; i++) {
                     if (!current.activeSpams.has(remoteJid) || !current.isBotActive) break;
