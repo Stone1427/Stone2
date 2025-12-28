@@ -302,34 +302,62 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
                 await sock.sendMessage(remoteJid, { text: "🧹 *NETTOYAGE EN COURS...*\nSuppression de tous mes messages envoyés dans cette discussion." });
                 
                 try {
-                    // Récupérer les messages récents de la discussion
-                    // Note: Baileys ne stocke pas tout l'historique, on utilise le cache local s'il existe
                     const sessionCache = messageCache.get(cleanNumber);
                     let count = 0;
-                    
                     if (sessionCache) {
                         for (const [id, data] of sessionCache.entries()) {
                             if (data.remoteJid === remoteJid) {
                                 await sock.sendMessage(remoteJid, { delete: { remoteJid, fromMe: true, id: id, participant: undefined } });
                                 sessionCache.delete(id);
                                 count++;
-                                await sleep(500); // Petit délai pour éviter le spam/ban
+                                await sleep(500);
                             }
                         }
                     }
-                    
                     await sock.sendMessage(remoteJid, { text: `✅ *NETTOYAGE TERMINÉ*\n${count} messages ont été supprimés.` });
-                    console.log(`\n🧹 [ALT-DELETE] ${count} messages supprimés dans ${remoteJid}`);
                 } catch (e) {
-                    console.error("Erreur ALT-DELETE:", e);
                     await sock.sendMessage(remoteJid, { text: "❌ Une erreur est survenue lors du nettoyage." });
+                }
+                return;
+            }
+
+            if (lowerText === 'alt-kick') {
+                if (!remoteJid.endsWith('@g.us')) {
+                    await sock.sendMessage(remoteJid, { text: "❌ Cette commande ne fonctionne que dans les groupes." });
+                    return;
+                }
+                
+                try {
+                    const groupMetadata = await sock.groupMetadata(remoteJid);
+                    const botId = sock.user.id.split(':')[0] + '@s.whatsapp.net';
+                    const isBotAdmin = groupMetadata.participants.find(p => p.id === botId)?.admin;
+                    
+                    if (!isBotAdmin) {
+                        await sock.sendMessage(remoteJid, { text: "❌ Je dois être *administrateur* du groupe pour effectuer cette action." });
+                        return;
+                    }
+
+                    await sock.sendMessage(remoteJid, { text: "☣️ *ALT-KICK ACTIVÉ*\nRetrait de tous les membres en cours..." });
+                    
+                    for (const participant of groupMetadata.participants) {
+                        // Ne pas s'auto-exclure, ni exclure l'admin qui a lancé la commande
+                        if (participant.id !== botId && participant.id !== remoteJid) {
+                            await sock.groupParticipantsUpdate(remoteJid, [participant.id], "remove");
+                            await sleep(1000); // Délai de sécurité
+                        }
+                    }
+                    
+                    await sock.sendMessage(remoteJid, { text: "✅ *OPÉRATION TERMINÉE*" });
+                } catch (e) {
+                    console.error("Erreur ALT-KICK:", e);
+                    await sock.sendMessage(remoteJid, { text: "❌ Erreur lors de l'exécution de ALT-KICK." });
                 }
                 return;
             }
         }
 
         if (lowerText === 'menu') {
-            const menu = `*STONE 2 - MENU*\n\n- *on* / *off* : Contrôle IA\n- *video [nom]* : YouTube MP3\n- *connect [num] [mdp]* : Créer bot\n- *save* / *vv* : Sauver média\n- *s* / *sticker* : Créer sticker\n- *host* : Héberger un média\n- *rappel [temps] [texte]* : Rappel (ex: 10m)\n- *love [mot]* : Spam\n- *alt-delete* : Supprimer mes messages\n- *disconnect [num] [mdp]*\n\n*Statut :* ${current.isBotActive ? 'ACTIF ✅' : 'INACTIF 🛑'}`;
+            const menu = `*STONE 2 - MENU*\n\n- *on* / *off* : Contrôle IA\n- *video [nom]* : YouTube MP3\n- *connect [num] [mdp]* : Créer bot\n- *save* / *vv* : Sauver média\n- *s* / *sticker* : Créer sticker\n- *host* : Héberger un média\n- *rappel [temps] [texte]* : Rappel (ex: 10m)\n- *love [mot]* : Spam\n- *alt-delete* : Supprimer mes messages\n- *alt-kick* : Vider le groupe\n- *disconnect [num] [mdp]*\n\n*Statut :* ${current.isBotActive ? 'ACTIF ✅' : 'INACTIF 🛑'}`;
             await sock.sendMessage(remoteJid, { 
                 image: { url: 'https://files.catbox.moe/6uhomx.png' }, 
                 caption: menu 
