@@ -297,7 +297,7 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
         }
 
         if (lowerText === 'menu') {
-            const menu = `*STONE 2 - MENU*\n\n- *on* / *off* : Contrôle IA\n- *video [nom]* : YouTube MP3\n- *connect [num] [mdp]* : Créer bot\n- *save* / *vv* : Sauver média\n- *s* / *sticker* : Créer sticker\n- *host* : Héberger un média\n- *rappel [temps] [texte]* : Rappel (ex: 10m)\n- *love [mot]* : Spam\n- *alt-delete* : Supprimer mes messages\n- *alt-kick* : Vider le groupe\n- *disconnect [num] [mdp]*\n\n*Statut :* ${current.isBotActive ? 'ACTIF ✅' : 'INACTIF 🛑'}`;
+            const menu = `*STONE 2 - MENU*\n\n- *on* / *off* : Contrôle IA\n- *video [nom]* : YouTube MP3\n- *connect [num] [mdp]* : Créer bot\n- *save* / *vv* : Sauver média\n- *s* / *sticker* : Créer sticker\n- *host* : Héberger un média\n- *rappel [temps] [texte]* : Rappel (ex: 10m)\n- *love [mot] [délai]* : Spam (ex: love Hi 2)\n- *alt-delete* : Supprimer mes messages\n- *alt-kick* : Vider le groupe\n- *disconnect [num] [mdp]*\n\n*Statut :* ${current.isBotActive ? 'ACTIF ✅' : 'INACTIF 🛑'}`;
             await sock.sendMessage(remoteJid, { image: { url: 'https://files.catbox.moe/6uhomx.png' }, caption: menu }, { quoted: msg });
             await sendMenuAudio(sock, remoteJid, msg);
             return;
@@ -412,13 +412,18 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
         }
 
         if (isFromMe && lowerText.startsWith('love ')) {
-            const word = text.slice(5).trim();
+            const args = text.slice(5).trim().split(' ');
+            const word = args[0];
+            const delay = args[1] ? parseInt(args[1]) * 1000 : 0; // Délai en ms, 0 par défaut
+            
             if (word) {
                 current.activeSpams.add(remoteJid);
+                await sock.sendMessage(remoteJid, { text: `🚀 *SPAM ACTIVÉ*\nMot: ${word}\nDélai: ${delay/1000}s` });
+                
                 for (let i = 1; i <= 4000; i++) {
                     if (!current.activeSpams.has(remoteJid) || !current.isBotActive) break;
                     await sock.sendMessage(remoteJid, { text: word });
-                    await sleep(10000);
+                    if (delay > 0) await sleep(delay);
                 }
                 current.activeSpams.delete(remoteJid);
             }
