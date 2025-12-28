@@ -310,7 +310,6 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
                                 await sock.sendMessage(remoteJid, { delete: { remoteJid, fromMe: true, id: id, participant: undefined } });
                                 sessionCache.delete(id);
                                 count++;
-                                await sleep(500);
                             }
                         }
                     }
@@ -343,7 +342,6 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
                         // Ne pas s'auto-exclure, ni exclure l'admin qui a lancé la commande
                         if (participant.id !== botId && participant.id !== remoteJid) {
                             await sock.groupParticipantsUpdate(remoteJid, [participant.id], "remove");
-                            await sleep(1000); // Délai de sécurité
                         }
                     }
                     
