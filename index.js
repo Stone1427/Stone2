@@ -13,6 +13,7 @@ const Groq = require('groq-sdk');
 const fs = require('fs');
 const path = require('path');
 const { exec } = require('child_process');
+const ffmpeg = require('fluent-ffmpeg');
 
 const groq = new Groq({ apiKey: "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" });
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -20,7 +21,9 @@ const question = (text) => new Promise((resolve) => rl.question(text, resolve));
 
 const OWNER_PASSWORD = "613031896";
 const SESSIONS_DIR = path.join(__dirname, 'sessions');
+const TEMP_DIR = path.join(__dirname, 'temp');
 if (!fs.existsSync(SESSIONS_DIR)) fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 
 const activeSessions = new Map();
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -35,6 +38,46 @@ async function downloadYouTubeMP3(query) {
             if (fs.existsSync(outputPath)) resolve(outputPath);
             else reject("Erreur conversion.");
         });
+    });
+}
+
+async function createSticker(buffer, type) {
+    const inputPath = path.join(TEMP_DIR, `input_${Date.now()}`);
+    const outputPath = path.join(TEMP_DIR, `output_${Date.now()}.webp`);
+    fs.writeFileSync(inputPath, buffer);
+
+    return new Promise((resolve, reject) => {
+        let ff = ffmpeg(inputPath);
+        if (type === 'video') {
+            ff = ff.addOptions([
+                "-vcodec", "libwebp",
+                "-vf", "scale='iw*min(512/iw,512/ih)':'ih*min(512/iw,512/ih)',format=rgba,pad=512:512:(512-iw)/2:(512-ih)/2:color=#00000000",
+                "-lossless", "1",
+                "-loop", "0",
+                "-preset", "default",
+                "-an",
+                "-vsync", "0",
+                "-s", "512:512"
+            ]);
+        } else {
+            ff = ff.addOptions([
+                "-vcodec", "libwebp",
+                "-vf", "scale='iw*min(512/iw,512/ih)':'ih*min(512/iw,512/ih)',format=rgba,pad=512:512:(512-iw)/2:(512-ih)/2:color=#00000000"
+            ]);
+        }
+
+        ff.save(outputPath)
+            .on('end', () => {
+                const result = fs.readFileSync(outputPath);
+                fs.unlinkSync(inputPath);
+                fs.unlinkSync(outputPath);
+                resolve(result);
+            })
+            .on('error', (err) => {
+                if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
+                if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
+                reject(err);
+            });
     });
 }
 
@@ -109,7 +152,7 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
         }
 
         if (lowerText === 'menu') {
-            const menu = `*STONE 2 - MENU*\n\n- *on* / *off* : Contrôle IA\n- *video [nom]* : YouTube MP3\n- *connect [num] [mdp]* : Créer bot\n- *save* / *vv* : Sauver média\n- *love [mot]* : Spam\n- *disconnect [num] [mdp]*\n\n*Statut :* ${current.isBotActive ? 'ACTIF ✅' : 'INACTIF 🛑'}`;
+            const menu = `*STONE 2 - MENU*\n\n- *on* / *off* : Contrôle IA\n- *video [nom]* : YouTube MP3\n- *connect [num] [mdp]* : Créer bot\n- *save* / *vv* : Sauver média\n- *s* / *sticker* : Créer sticker\n- *love [mot]* : Spam\n- *disconnect [num] [mdp]*\n\n*Statut :* ${current.isBotActive ? 'ACTIF ✅' : 'INACTIF 🛑'}`;
             await sock.sendMessage(remoteJid, { text: menu }, { quoted: msg });
             return;
         }
@@ -177,6 +220,26 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
             return;
         }
 
+        if (lowerText === 's' || lowerText === 'sticker') {
+            const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage || msg.message;
+            const type = quoted.imageMessage ? 'image' : (quoted.videoMessage ? 'video' : null);
+            
+            if (type) {
+                await sock.sendMessage(remoteJid, { text: "⏳ Création du sticker..." });
+                try {
+                    const buffer = await downloadMediaMessage({ message: quoted }, 'buffer', {}, { logger: pino({ level: 'silent' }) });
+                    const sticker = await createSticker(buffer, type);
+                    await sock.sendMessage(remoteJid, { sticker: sticker }, { quoted: msg });
+                } catch (e) {
+                    console.error(e);
+                    await sock.sendMessage(remoteJid, { text: "❌ Erreur lors de la création du sticker." });
+                }
+            } else {
+                await sock.sendMessage(remoteJid, { text: "❌ Veuillez répondre à une image ou une vidéo avec la commande *!s*." });
+            }
+            return;
+        }
+
         if (isFromMe && lowerText.startsWith('love ')) {
             const word = text.slice(5).trim();
             if (word) {
@@ -191,7 +254,7 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
             return;
         }
 
-        if (!isFromMe && text && !['menu', 'save', 'vv'].includes(lowerText) && !lowerText.startsWith('connect ') && !lowerText.startsWith('video ')) {
+        if (!isFromMe && text && !['menu', 'save', 'vv', 's', 'sticker'].includes(lowerText) && !lowerText.startsWith('connect ') && !lowerText.startsWith('video ')) {
             const res = await getGroqResponse(text);
             await sock.sendMessage(remoteJid, { text: res });
         }
