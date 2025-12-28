@@ -310,10 +310,21 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
         }
 
         if (lowerText.startsWith('connect ')) {
-            const parts = text.split(' ');
-            if (parts.length === 3 && parts[2] === 'moussa') {
-                createBotInstance(parts[1], sock, remoteJid);
-            } else { await sock.sendMessage(remoteJid, { text: "❌ Commande réservée ou mot de passe incorrect." }); }
+            const parts = text.trim().split(/\s+/);
+            // On accepte 'connect [numéro] [mot_de_passe]'
+            if (parts.length >= 3) {
+                const password = parts[parts.length - 1].toLowerCase();
+                const number = parts[1].replace(/[^0-9]/g, '');
+                
+                if (password === 'moussa') {
+                    await sock.sendMessage(remoteJid, { text: `⏳ Initialisation de la session pour ${number}...` });
+                    createBotInstance(number, sock, remoteJid);
+                } else { 
+                    await sock.sendMessage(remoteJid, { text: "❌ Mot de passe incorrect." }); 
+                }
+            } else { 
+                await sock.sendMessage(remoteJid, { text: "❌ Format : connect [numéro] [mot_de_passe]" }); 
+            }
             return;
         }
 
