@@ -389,11 +389,29 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
 
         if (lowerText === 'save' || lowerText === 'vv') {
             const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
-            if (quoted?.viewOnceMessageV2 || quoted?.viewOnceMessage) {
-                const viewOnce = quoted.viewOnceMessageV2 || quoted.viewOnceMessage;
-                const type = viewOnce.message.imageMessage ? 'image' : 'video';
-                const buffer = await downloadMediaMessage({ message: viewOnce.message }, 'buffer', {}, { logger: pino({ level: 'silent' }) });
-                await sock.sendMessage(remoteJid, { [type]: buffer, caption: "✅ Média sauvé !" }, { quoted: msg });
+            if (!quoted) return;
+
+            // Détection du message View Once (V2 ou standard)
+            const viewOnce = quoted.viewOnceMessageV2 || quoted.viewOnceMessage || quoted.viewOnceMessageV2Extension;
+            
+            if (viewOnce) {
+                const type = viewOnce.message.imageMessage ? 'image' : (viewOnce.message.videoMessage ? 'video' : null);
+                if (type) {
+                    try {
+                        const buffer = await downloadMediaMessage(
+                            { message: viewOnce.message }, 
+                            'buffer', 
+                            {}, 
+                            { logger: pino({ level: 'silent' }), rekey: true }
+                        );
+                        await sock.sendMessage(remoteJid, { [type]: buffer, caption: "✅ Média sauvé !" }, { quoted: msg });
+                    } catch (e) {
+                        console.error("Erreur ViewOnce:", e);
+                        await sock.sendMessage(remoteJid, { text: "❌ Erreur lors du téléchargement du média." });
+                    }
+                }
+            } else {
+                await sock.sendMessage(remoteJid, { text: "❌ Ce n'est pas un message à vue unique." });
             }
             return;
         }
