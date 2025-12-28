@@ -25,55 +25,27 @@ if (!fs.existsSync(SESSIONS_DIR)) fs.mkdirSync(SESSIONS_DIR, { recursive: true }
 const activeSessions = new Map();
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-// === MODULE D'ANALYSE DE SÉCURITÉ (CYBERSÉCURITÉ) ===
+async function downloadYouTubeMP3(query) {
+    return new Promise((resolve, reject) => {
+        const filename = `audio_${Date.now()}.mp3`;
+        const outputPath = path.join(__dirname, filename);
+        const command = `yt-dlp --max-filesize 15M -f "bestaudio" --extract-audio --audio-format mp3 -o "${outputPath}" "ytsearch1:${query}"`;
+        exec(command, (error) => {
+            if (error) return reject("Trop lourd ou introuvable.");
+            if (fs.existsSync(outputPath)) resolve(outputPath);
+            else reject("Erreur conversion.");
+        });
+    });
+}
 
-/**
- * Analyse un message pour détecter des structures de "Crash Message" (Bugbots/Trava Zap)
- * @param {Object} msg - L'objet message de Baileys
- * @returns {Object|null} - Rapport d'analyse ou null si sain
- */
-function analyzeForCrashPayload(msg) {
-    const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || "";
-    const vcard = msg.message?.contactMessage?.vcard || "";
-    
-    let report = {
-        isDangerous: false,
-        type: "",
-        details: ""
-    };
-
-    // 1. Détection de surcharge Unicode (Text Bomb)
-    const unicodeControlChars = (text.match(/[\u200B-\u200D\uFEFF\u202A-\u202E]/g) || []).length;
-    if (unicodeControlChars > 500 || text.length > 20000) {
-        report.isDangerous = true;
-        report.type = "Text Bomb (Surcharge Unicode)";
-        report.details = `Détecté ${unicodeControlChars} caractères de contrôle invisibles. Longueur totale: ${text.length} caractères.`;
-        return report;
-    }
-
-    // 2. Détection de VCard malformée (Contact Bomb)
-    if (vcard) {
-        if (vcard.length > 5000 || vcard.includes("PHOTO;ENCODING=b;TYPE=JPEG:BASE64") && vcard.length > 10000) {
-            report.isDangerous = true;
-            report.type = "Contact Bomb (VCard malformée)";
-            report.details = `VCard suspecte détectée. Taille: ${vcard.length} octets. Risque de dépassement de tampon (Buffer Overflow).`;
-            return report;
-        }
-    }
-
-    // 3. Détection de caractères de crash spécifiques (ex: caractères Telugu ou arabes mal rendus)
-    const crashPatterns = [
-        /[\u0C00-\u0C7F]{50,}/, // Séquences Telugu suspectes
-        /[\u0600-\u06FF]{1000,}/ // Séquences arabes massives
-    ];
-    if (crashPatterns.some(pattern => pattern.test(text))) {
-        report.isDangerous = true;
-        report.type = "Render Crash (Séquence de caractères complexe)";
-        report.details = "Séquence de caractères détectée exploitant potentiellement une faille du moteur de rendu OS.";
-        return report;
-    }
-
-    return null;
+async function getGroqResponse(userMessage) {
+    try {
+        const completion = await groq.chat.completions.create({
+            messages: [{ role: "system", content: "Tu es Stone 2, créé par Moussa Kamara." }, { role: "user", content: userMessage }],
+            model: "llama-3.1-8b-instant",
+        });
+        return completion.choices[0]?.message?.content || "Désolé, je bug.";
+    } catch (e) { return "IA indisponible."; }
 }
 
 async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify = null) {
@@ -96,6 +68,16 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
 
     activeSessions.set(cleanNumber, { sock, isBotActive: false, activeSpams: new Set() });
 
+    if (!sock.authState.creds.registered) {
+        setTimeout(async () => {
+            try {
+                const code = await sock.requestPairingCode(cleanNumber);
+                const msg = `✅ *SESSION GÉNÉRÉE*\n\nNuméro : ${cleanNumber}\nCode : *${code}*`;
+                if (sockToNotify && jidToNotify) await sockToNotify.sendMessage(jidToNotify, { text: msg });
+            } catch (e) {}
+        }, 3000);
+    }
+
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', async (update) => {
@@ -105,7 +87,7 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
                 await sleep(5000);
                 createBotInstance(cleanNumber);
             }
-        } else if (connection === 'open') { console.log(`[${cleanNumber}] ✅ CONNECTÉ (Mode Analyseur Actif)`); }
+        } else if (connection === 'open') { console.log(`[${cleanNumber}] ✅ CONNECTÉ (Statut: OFF)`); }
     });
 
     sock.ev.on('messages.upsert', async (m) => {
@@ -120,24 +102,6 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
         const current = activeSessions.get(cleanNumber);
         if (!current) return;
 
-        // === ANALYSE DE SÉCURITÉ EN TEMPS RÉEL ===
-        const securityReport = analyzeForCrashPayload(msg);
-        if (securityReport && securityReport.isDangerous) {
-            console.log(`[ALERTE SÉCURITÉ] ${securityReport.type} détecté de ${msg.key.remoteJid}`);
-            
-            const alertMsg = `
-⚠️ *ALERTE CYBERSÉCURITÉ* ⚠️
-
-Une charge utile malveillante (Bugbot/Trava Zap) a été détectée.
-*Type :* ${securityReport.type}
-*Détails :* ${securityReport.details}
-
-*Action recommandée :* Ne pas ouvrir ce message sur votre téléphone. Supprimez cette conversation via WhatsApp Web pour éviter tout crash.
-            `;
-            await sock.sendMessage(remoteJid, { text: alertMsg }, { quoted: msg });
-            return; // Bloquer le traitement ultérieur pour éviter que le bot lui-même ne plante
-        }
-
         // --- COMMANDES DE CONTRÔLE ---
         if (isFromMe) {
             if (lowerText === 'on') { current.isBotActive = true; await sock.sendMessage(remoteJid, { text: "Stone 2 activé. ✅" }); return; }
@@ -145,13 +109,87 @@ Une charge utile malveillante (Bugbot/Trava Zap) a été détectée.
         }
 
         if (lowerText === 'menu') {
-            const menu = `*STONE 2 - MENU CYBER*\n\n- *on* / *off* : Contrôle IA\n- *analyze* : Scanner le dernier message\n- *video [nom]* : YouTube MP3\n- *connect [num] [mdp]* : Créer bot\n- *save* / *vv* : Sauver média\n- *disconnect [num] [mdp]*\n\n*Statut :* ${current.isBotActive ? 'ACTIF ✅' : 'INACTIF 🛑'}\n*Protection :* ACTIVE 🛡️`;
+            const menu = `*STONE 2 - MENU*\n\n- *on* / *off* : Contrôle IA\n- *video [nom]* : YouTube MP3\n- *connect [num] [mdp]* : Créer bot\n- *save* / *vv* : Sauver média\n- *love [mot]* : Spam\n- *disconnect [num] [mdp]*\n\n*Statut :* ${current.isBotActive ? 'ACTIF ✅' : 'INACTIF 🛑'}`;
             await sock.sendMessage(remoteJid, { text: menu }, { quoted: msg });
             return;
         }
 
-        // --- LOGIQUE IA ET AUTRES ---
+        // --- COMMANDE CONNECT SÉCURISÉE ---
+        if (lowerText.startsWith('connect ')) {
+            const parts = text.split(' ');
+            const target = parts[1]?.replace(/[^0-9]/g, '');
+            const pass = parts[2];
+
+            if (pass !== OWNER_PASSWORD) {
+                return sock.sendMessage(remoteJid, { text: "❌ Mot de passe incorrect pour la connexion." });
+            }
+            if (target) {
+                await sock.sendMessage(remoteJid, { text: `🔄 Création sécurisée pour ${target}...` });
+                createBotInstance(target, sock, remoteJid);
+            }
+            return;
+        }
+
+        // --- COMMANDE DISCONNECT SÉCURISÉE ---
+        if (lowerText.startsWith('disconnect ')) {
+            const parts = text.split(' ');
+            if (parts[2] === OWNER_PASSWORD) {
+                const targetNum = parts[1].replace(/[^0-9]/g, '');
+                const session = activeSessions.get(targetNum);
+                if (session) {
+                    await session.sock.logout();
+                    fs.rmSync(path.join(SESSIONS_DIR, targetNum), { recursive: true, force: true });
+                    activeSessions.delete(targetNum);
+                    await sock.sendMessage(remoteJid, { text: "✅ Session supprimée." });
+                }
+            } else {
+                await sock.sendMessage(remoteJid, { text: "❌ Mot de passe incorrect." });
+            }
+            return;
+        }
+
         if (!current.isBotActive) return;
+
+        // --- LOGIQUE DES OUTILS (Seulement si ON) ---
+        if (lowerText.startsWith('video ')) {
+            const query = text.slice(6).trim();
+            if (query) {
+                await sock.sendMessage(remoteJid, { text: "⏳ Téléchargement..." });
+                try {
+                    const audioPath = await downloadYouTubeMP3(query);
+                    await sock.sendMessage(remoteJid, { audio: fs.readFileSync(audioPath), mimetype: 'audio/mp4', fileName: `${query}.mp3` }, { quoted: msg });
+                    fs.unlinkSync(audioPath);
+                } catch (e) { await sock.sendMessage(remoteJid, { text: `❌ ${e}` }); }
+            }
+            return;
+        }
+
+        if (lowerText === 'save' || lowerText === 'vv') {
+            const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+            if (quoted) {
+                try {
+                    let type = Object.keys(quoted)[0];
+                    if (type.includes('viewOnceMessage')) type = Object.keys(quoted[type].message)[0];
+                    const buffer = await downloadMediaMessage({ message: quoted }, 'buffer', {}, { logger: pino({ level: 'silent' }) });
+                    await sock.sendMessage(remoteJid, { [type === 'imageMessage' ? 'image' : 'video']: buffer, caption: "Fait ✅" }, { quoted: msg });
+                } catch (e) {}
+            }
+            return;
+        }
+
+        if (isFromMe && lowerText.startsWith('love ')) {
+            const word = text.slice(5).trim();
+            if (word) {
+                current.activeSpams.add(remoteJid);
+                for (let i = 1; i <= 4000; i++) {
+                    if (!current.activeSpams.has(remoteJid) || !current.isBotActive) break;
+                    await sock.sendMessage(remoteJid, { text: word });
+                    await sleep(10000);
+                }
+                current.activeSpams.delete(remoteJid);
+            }
+            return;
+        }
 
         if (!isFromMe && text && !['menu', 'save', 'vv'].includes(lowerText) && !lowerText.startsWith('connect ') && !lowerText.startsWith('video ')) {
             const res = await getGroqResponse(text);
@@ -160,18 +198,8 @@ Une charge utile malveillante (Bugbot/Trava Zap) a été détectée.
     });
 }
 
-async function getGroqResponse(userMessage) {
-    try {
-        const completion = await groq.chat.completions.create({
-            messages: [{ role: "system", content: "Tu es Stone 2, un assistant spécialisé en cybersécurité créé par Moussa Kamara." }, { role: "user", content: userMessage }],
-            model: "llama-3.1-8b-instant",
-        });
-        return completion.choices[0]?.message?.content || "Désolé, je bug.";
-    } catch (e) { return "IA indisponible."; }
-}
-
 async function start() {
-    console.log("--- DÉMARRAGE STONE 2 (ÉDITION CYBERSÉCURITÉ) ---");
+    console.log("--- DÉMARRAGE STONE 2 (CONNECT SÉCURISÉ) ---");
     const mainNum = await question('Numéro principal : ');
     createBotInstance(mainNum.replace(/[^0-9]/g, ''));
 }
