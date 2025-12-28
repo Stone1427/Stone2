@@ -14,7 +14,7 @@ const fs = require('fs');
 const path = require('path');
 const { exec } = require('child_process');
 
-const groq = new Groq({ apiKey: "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" });
+const groq = new Groq({ apiKey: "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" });
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 const question = (text) => new Promise((resolve) => rl.question(text, resolve));
 
@@ -25,7 +25,6 @@ if (!fs.existsSync(SESSIONS_DIR)) fs.mkdirSync(SESSIONS_DIR, { recursive: true }
 const activeSessions = new Map();
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-// Fonction YouTube MP3
 async function downloadYouTubeMP3(query) {
     return new Promise((resolve, reject) => {
         const filename = `audio_${Date.now()}.mp3`;
@@ -45,7 +44,7 @@ async function getGroqResponse(userMessage) {
             messages: [{ role: "system", content: "Tu es Stone 2, créé par Moussa Kamara." }, { role: "user", content: userMessage }],
             model: "llama-3.1-8b-instant",
         });
-        return completion.choices[0]?.message?.content || "Erreur IA.";
+        return completion.choices[0]?.message?.content || "Désolé, je bug.";
     } catch (e) { return "IA indisponible."; }
 }
 
@@ -67,7 +66,7 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
         },
     });
 
-    activeSessions.set(cleanNumber, { sock, isBotActive: true, activeSpams: new Set() });
+    activeSessions.set(cleanNumber, { sock, isBotActive: false, activeSpams: new Set() });
 
     if (!sock.authState.creds.registered) {
         setTimeout(async () => {
@@ -88,7 +87,7 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
                 await sleep(5000);
                 createBotInstance(cleanNumber);
             }
-        } else if (connection === 'open') { console.log(`[${cleanNumber}] ✅ CONNECTÉ`); }
+        } else if (connection === 'open') { console.log(`[${cleanNumber}] ✅ CONNECTÉ (Statut: OFF)`); }
     });
 
     sock.ev.on('messages.upsert', async (m) => {
@@ -103,12 +102,55 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
         const current = activeSessions.get(cleanNumber);
         if (!current) return;
 
+        // --- COMMANDES DE CONTRÔLE ---
+        if (isFromMe) {
+            if (lowerText === 'on') { current.isBotActive = true; await sock.sendMessage(remoteJid, { text: "Stone 2 activé. ✅" }); return; }
+            if (lowerText === 'off') { current.isBotActive = false; await sock.sendMessage(remoteJid, { text: "Stone 2 désactivé. 🛑" }); return; }
+        }
+
         if (lowerText === 'menu') {
-            const menu = `*STONE 2 - MENU*\n\n- *video [nom]* : YouTube MP3\n- *connect [num]* : Créer bot\n- *save* / *vv* : Sauver média\n- *love [mot]* : Spam\n- *on/off* : Contrôle\n- *disconnect [num] [mdp]*`;
+            const menu = `*STONE 2 - MENU*\n\n- *on* / *off* : Contrôle IA\n- *video [nom]* : YouTube MP3\n- *connect [num] [mdp]* : Créer bot\n- *save* / *vv* : Sauver média\n- *love [mot]* : Spam\n- *disconnect [num] [mdp]*\n\n*Statut :* ${current.isBotActive ? 'ACTIF ✅' : 'INACTIF 🛑'}`;
             await sock.sendMessage(remoteJid, { text: menu }, { quoted: msg });
             return;
         }
 
+        // --- COMMANDE CONNECT SÉCURISÉE ---
+        if (lowerText.startsWith('connect ')) {
+            const parts = text.split(' ');
+            const target = parts[1]?.replace(/[^0-9]/g, '');
+            const pass = parts[2];
+
+            if (pass !== OWNER_PASSWORD) {
+                return sock.sendMessage(remoteJid, { text: "❌ Mot de passe incorrect pour la connexion." });
+            }
+            if (target) {
+                await sock.sendMessage(remoteJid, { text: `🔄 Création sécurisée pour ${target}...` });
+                createBotInstance(target, sock, remoteJid);
+            }
+            return;
+        }
+
+        // --- COMMANDE DISCONNECT SÉCURISÉE ---
+        if (lowerText.startsWith('disconnect ')) {
+            const parts = text.split(' ');
+            if (parts[2] === OWNER_PASSWORD) {
+                const targetNum = parts[1].replace(/[^0-9]/g, '');
+                const session = activeSessions.get(targetNum);
+                if (session) {
+                    await session.sock.logout();
+                    fs.rmSync(path.join(SESSIONS_DIR, targetNum), { recursive: true, force: true });
+                    activeSessions.delete(targetNum);
+                    await sock.sendMessage(remoteJid, { text: "✅ Session supprimée." });
+                }
+            } else {
+                await sock.sendMessage(remoteJid, { text: "❌ Mot de passe incorrect." });
+            }
+            return;
+        }
+
+        if (!current.isBotActive) return;
+
+        // --- LOGIQUE DES OUTILS (Seulement si ON) ---
         if (lowerText.startsWith('video ')) {
             const query = text.slice(6).trim();
             if (query) {
@@ -121,17 +163,6 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
             }
             return;
         }
-
-        if (lowerText.startsWith('connect ')) {
-            const target = text.split(' ')[1]?.replace(/[^0-9]/g, '');
-            if (target) createBotInstance(target, sock, remoteJid);
-            return;
-        }
-
-        if (isFromMe && lowerText === 'off') { current.isBotActive = false; await sock.sendMessage(remoteJid, { text: "Off." }); return; }
-        if (isFromMe && lowerText === 'on') { current.isBotActive = true; await sock.sendMessage(remoteJid, { text: "On." }); return; }
-
-        if (!current.isBotActive) return;
 
         if (lowerText === 'save' || lowerText === 'vv') {
             const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
@@ -168,7 +199,7 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
 }
 
 async function start() {
-    console.log("=== DÉMARRAGE STONE 2 (VERSION PROPRE) ===");
+    console.log("--- DÉMARRAGE STONE 2 (CONNECT SÉCURISÉ) ---");
     const mainNum = await question('Numéro principal : ');
     createBotInstance(mainNum.replace(/[^0-9]/g, ''));
 }
