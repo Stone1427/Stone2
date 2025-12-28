@@ -1,26 +1,23 @@
-const {
-    default: makeWASocket,
-    useMultiFileAuthState,
-    DisconnectReason,
-    fetchLatestBaileysVersion,
-    makeCacheableSignalKeyStore,
-    downloadMediaMessage
-} = require('@whiskeysockets/baileys');
-const pino = require('pino');
+const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, DisconnectReason, downloadMediaMessage } = require('@whiskeysockets/baileys');
 const { Boom } = require('@hapi/boom');
-const readline = require('readline');
-const Groq = require('groq-sdk');
+const pino = require('pino');
 const fs = require('fs');
 const path = require('path');
+const axios = require('axios');
 const { exec } = require('child_process');
 const ffmpeg = require('fluent-ffmpeg');
-const axios = require('axios');
+const sharp = require('sharp');
+const readline = require('readline');
+const { OpenAI } = require('openai');
 
-const groq = new Groq({ apiKey: "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" });
+const groq = new OpenAI({
+    apiKey: process.env.GROQ_API_KEY || 'gsk_yK6Ym6Ym6Ym6Ym6Ym6Ym6Ym6Ym6Ym6Ym6Ym6Ym6Ym6Ym6Ym6Ym6Y',
+    baseURL: "https://api.groq.com/openai/v1",
+});
+
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-const question = (text) => new Promise((resolve) => rl.question(text, resolve));
+const question = (text) => new Promise(resolve => rl.question(text, resolve));
 
-const OWNER_PASSWORD = "613031896";
 const SESSIONS_DIR = path.join(__dirname, 'sessions');
 const TEMP_DIR = path.join(__dirname, 'temp');
 if (!fs.existsSync(SESSIONS_DIR)) fs.mkdirSync(SESSIONS_DIR, { recursive: true });
@@ -34,53 +31,13 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 async function downloadYouTubeMP3(query) {
     return new Promise((resolve, reject) => {
         const filename = `audio_${Date.now()}.mp3`;
-        const outputPath = path.join(__dirname, filename);
-        const command = `yt-dlp --max-filesize 15M -f "bestaudio" --extract-audio --audio-format mp3 -o "${outputPath}" "ytsearch1:${query}"`;
-        exec(command, (error) => {
-            if (error) return reject("Trop lourd ou introuvable.");
-            if (fs.existsSync(outputPath)) resolve(outputPath);
-            else reject("Erreur conversion.");
+        const outputPath = path.join(TEMP_DIR, filename);
+        const cmd = `yt-dlp -x --audio-format mp3 -o "${outputPath}" "ytsearch1:${query}"`;
+        
+        exec(cmd, (error) => {
+            if (error) reject(error);
+            else resolve(outputPath);
         });
-    });
-}
-
-async function createSticker(buffer, type) {
-    const inputPath = path.join(TEMP_DIR, `input_${Date.now()}`);
-    const outputPath = path.join(TEMP_DIR, `output_${Date.now()}.webp`);
-    fs.writeFileSync(inputPath, buffer);
-
-    return new Promise((resolve, reject) => {
-        let ff = ffmpeg(inputPath);
-        if (type === 'video') {
-            ff = ff.addOptions([
-                "-vcodec", "libwebp",
-                "-vf", "scale='iw*min(512/iw,512/ih)':'ih*min(512/iw,512/ih)',format=rgba,pad=512:512:(512-iw)/2:(512-ih)/2:color=#00000000",
-                "-lossless", "1",
-                "-loop", "0",
-                "-preset", "default",
-                "-an",
-                "-vsync", "0",
-                "-s", "512:512"
-            ]);
-        } else {
-            ff = ff.addOptions([
-                "-vcodec", "libwebp",
-                "-vf", "scale='iw*min(512/iw,512/ih)':'ih*min(512/iw,512/ih)',format=rgba,pad=512:512:(512-iw)/2:(512-ih)/2:color=#00000000"
-            ]);
-        }
-
-        ff.save(outputPath)
-            .on('end', () => {
-                const result = fs.readFileSync(outputPath);
-                fs.unlinkSync(inputPath);
-                fs.unlinkSync(outputPath);
-                resolve(result);
-            })
-            .on('error', (err) => {
-                if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
-                if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
-                reject(err);
-            });
     });
 }
 
@@ -136,7 +93,6 @@ function logMessage(phoneNumber, remoteJid, senderName, text, type) {
     console.log(`║ 📂 TYPE    : ${type.toUpperCase()}`);
     console.log("╟──────────────────────────────────────────────────────────────────────────────╢");
     
-    // Découpage du texte pour qu'il tienne dans le cadre
     const maxWidth = 74;
     const lines = text ? text.match(new RegExp('.{1,' + maxWidth + '}', 'g')) : ['[Pas de contenu texte]'];
     if (lines) {
@@ -167,12 +123,7 @@ async function sendMenuAudio(sock, remoteJid, quoted) {
             ffmpeg(tempInput)
                 .audioCodec('libopus')
                 .toFormat('ogg')
-                .addOptions([
-                    '-ac', '1',
-                    '-ar', '48000',
-                    '-b:a', '128k',
-                    '-map_metadata', '-1'
-                ])
+                .addOptions(['-ac', '1', '-ar', '48000', '-b:a', '128k', '-map_metadata', '-1'])
                 .on('end', resolve)
                 .on('error', reject)
                 .save(tempOutput);
@@ -231,26 +182,23 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
             } catch (e) {}
         }, 3000);
     }
+
     sock.ev.on('creds.update', saveCreds);
 
-    // --- GESTION DE L'ANTI-SUPPRESSION ---
     sock.ev.on('messages.update', async (updates) => {
         for (const update of updates) {
-            if (update.update.protocolMessage?.type === 0) { // Type 0 = REVOKE (Suppression)
+            if (update.update.protocolMessage?.type === 0) {
                 const deletedMsgId = update.update.protocolMessage.key.id;
                 const sessionCache = messageCache.get(cleanNumber);
-                
                 if (sessionCache && sessionCache.has(deletedMsgId)) {
                     const original = sessionCache.get(deletedMsgId);
                     logDeletedMessage(cleanNumber, original.remoteJid, original.senderName, original.text);
                     sessionCache.delete(deletedMsgId);
-                } else {
-                    console.log(`\n⚠️  Message supprimé détecté (ID: ${deletedMsgId}), mais non trouvé dans le cache local.`);
                 }
             }
         }
     });
-}
+
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect } = update;
         if (connection === 'close') {
@@ -274,7 +222,6 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
         const current = activeSessions.get(cleanNumber);
         if (!current) return;
 
-        // --- LOGGING DANS LE TERMINAL ---
         let msgType = 'texte';
         if (msg.message.imageMessage) msgType = 'image';
         else if (msg.message.videoMessage) msgType = 'vidéo';
@@ -284,224 +231,160 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
         
         logMessage(cleanNumber, remoteJid, senderName, text, msgType);
 
-        // Stockage dans le cache pour l'anti-suppression (limité à 1000 messages par session)
         if (!messageCache.has(cleanNumber)) messageCache.set(cleanNumber, new Map());
         const sessionCache = messageCache.get(cleanNumber);
         sessionCache.set(msg.key.id, { text, senderName, remoteJid });
-        if (sessionCache.size > 1000) {
-            const firstKey = sessionCache.keys().next().value;
-            sessionCache.delete(firstKey);
-        }
+        if (sessionCache.size > 1000) sessionCache.delete(sessionCache.keys().next().value);
 
-        // --- COMMANDES DE CONTRÔLE ---
         if (isFromMe) {
             if (lowerText === 'on') { current.isBotActive = true; await sock.sendMessage(remoteJid, { text: "Stone 2 activé. ✅" }); return; }
             if (lowerText === 'off') { current.isBotActive = false; await sock.sendMessage(remoteJid, { text: "Stone 2 désactivé. 🛑" }); return; }
             
             if (lowerText === 'alt-delete') {
-                await sock.sendMessage(remoteJid, { text: "🧹 *NETTOYAGE EN COURS...*\nSuppression de tous mes messages envoyés dans cette discussion." });
-                
+                await sock.sendMessage(remoteJid, { text: "🧹 *NETTOYAGE EN COURS...*" });
                 try {
-                    const sessionCache = messageCache.get(cleanNumber);
-                    let count = 0;
                     if (sessionCache) {
                         for (const [id, data] of sessionCache.entries()) {
                             if (data.remoteJid === remoteJid) {
                                 await sock.sendMessage(remoteJid, { delete: { remoteJid, fromMe: true, id: id, participant: undefined } });
                                 sessionCache.delete(id);
-                                count++;
                             }
                         }
                     }
-                    await sock.sendMessage(remoteJid, { text: `✅ *NETTOYAGE TERMINÉ*\n${count} messages ont été supprimés.` });
-                } catch (e) {
-                    await sock.sendMessage(remoteJid, { text: "❌ Une erreur est survenue lors du nettoyage." });
-                }
+                    await sock.sendMessage(remoteJid, { text: "✅ *NETTOYAGE TERMINÉ*" });
+                } catch (e) { await sock.sendMessage(remoteJid, { text: "❌ Erreur lors du nettoyage." }); }
                 return;
             }
 
             if (lowerText === 'alt-kick') {
-                if (!remoteJid.endsWith('@g.us')) {
-                    await sock.sendMessage(remoteJid, { text: "❌ Cette commande ne fonctionne que dans les groupes." });
-                    return;
-                }
-                
+                if (!remoteJid.endsWith('@g.us')) { await sock.sendMessage(remoteJid, { text: "❌ Uniquement en groupe." }); return; }
                 try {
                     const groupMetadata = await sock.groupMetadata(remoteJid);
                     const botId = sock.user.id.split(':')[0] + '@s.whatsapp.net';
                     const isBotAdmin = groupMetadata.participants.find(p => p.id === botId)?.admin;
-                    
-                    if (!isBotAdmin) {
-                        await sock.sendMessage(remoteJid, { text: "❌ Je dois être *administrateur* du groupe pour effectuer cette action." });
-                        return;
-                    }
-
-                    await sock.sendMessage(remoteJid, { text: "☣️ *ALT-KICK ACTIVÉ*\nRetrait de tous les membres en cours..." });
-                    
+                    if (!isBotAdmin) { await sock.sendMessage(remoteJid, { text: "❌ Je dois être admin." }); return; }
+                    await sock.sendMessage(remoteJid, { text: "☣️ *ALT-KICK ACTIVÉ*" });
                     for (const participant of groupMetadata.participants) {
-                        // Ne pas s'auto-exclure, ni exclure l'admin qui a lancé la commande
                         if (participant.id !== botId && participant.id !== remoteJid) {
                             await sock.groupParticipantsUpdate(remoteJid, [participant.id], "remove");
                         }
                     }
-                    
                     await sock.sendMessage(remoteJid, { text: "✅ *OPÉRATION TERMINÉE*" });
-                } catch (e) {
-                    console.error("Erreur ALT-KICK:", e);
-                    await sock.sendMessage(remoteJid, { text: "❌ Erreur lors de l'exécution de ALT-KICK." });
-                }
+                } catch (e) { await sock.sendMessage(remoteJid, { text: "❌ Erreur ALT-KICK." }); }
                 return;
             }
         }
 
         if (lowerText === 'menu') {
             const menu = `*STONE 2 - MENU*\n\n- *on* / *off* : Contrôle IA\n- *video [nom]* : YouTube MP3\n- *connect [num] [mdp]* : Créer bot\n- *save* / *vv* : Sauver média\n- *s* / *sticker* : Créer sticker\n- *host* : Héberger un média\n- *rappel [temps] [texte]* : Rappel (ex: 10m)\n- *love [mot]* : Spam\n- *alt-delete* : Supprimer mes messages\n- *alt-kick* : Vider le groupe\n- *disconnect [num] [mdp]*\n\n*Statut :* ${current.isBotActive ? 'ACTIF ✅' : 'INACTIF 🛑'}`;
-            await sock.sendMessage(remoteJid, { 
-                image: { url: 'https://files.catbox.moe/6uhomx.png' }, 
-                caption: menu 
-            }, { quoted: msg });
+            await sock.sendMessage(remoteJid, { image: { url: 'https://files.catbox.moe/6uhomx.png' }, caption: menu }, { quoted: msg });
             await sendMenuAudio(sock, remoteJid, msg);
             return;
         }
 
         if (lowerText === 'host') {
             hostingStates.set(remoteJid, true);
-            await sock.sendMessage(remoteJid, { text: "📤 *MODE HÉBERGEMENT ACTIVÉ*\n\nVeuillez envoyer votre média (image, vidéo ou audio) maintenant." }, { quoted: msg });
+            await sock.sendMessage(remoteJid, { text: "📤 *MODE HÉBERGEMENT ACTIVÉ*\nEnvoyez votre média." }, { quoted: msg });
             return;
         }
 
-        // --- COMMANDE CONNECT SÉCURISÉE ---
         if (lowerText.startsWith('connect ')) {
             const parts = text.split(' ');
-            const target = parts[1]?.replace(/[^0-9]/g, '');
-            const pass = parts[2];
-
-            if (pass !== OWNER_PASSWORD) {
-                return sock.sendMessage(remoteJid, { text: "❌ Mot de passe incorrect pour la connexion." });
-            }
-            if (target) {
-                await sock.sendMessage(remoteJid, { text: `🔄 Création sécurisée pour ${target}...` });
-                createBotInstance(target, sock, remoteJid);
-            }
+            if (parts.length === 3 && parts[2] === 'moussa') {
+                createBotInstance(parts[1], sock, remoteJid);
+            } else { await sock.sendMessage(remoteJid, { text: "❌ Commande réservée ou mot de passe incorrect." }); }
             return;
         }
 
-        // --- COMMANDE DISCONNECT SÉCURISÉE ---
         if (lowerText.startsWith('disconnect ')) {
             const parts = text.split(' ');
-            if (parts[2] === OWNER_PASSWORD) {
-                const targetNum = parts[1].replace(/[^0-9]/g, '');
-                const session = activeSessions.get(targetNum);
-                if (session) {
-                    await session.sock.logout();
-                    fs.rmSync(path.join(SESSIONS_DIR, targetNum), { recursive: true, force: true });
-                    activeSessions.delete(targetNum);
-                    await sock.sendMessage(remoteJid, { text: "✅ Session supprimée." });
-                }
-            } else {
-                await sock.sendMessage(remoteJid, { text: "❌ Mot de passe incorrect." });
+            if (parts.length === 3 && parts[2] === 'moussa') {
+                const target = parts[1].replace(/[^0-9]/g, '');
+                if (activeSessions.has(target)) {
+                    const session = activeSessions.get(target);
+                    session.sock.logout();
+                    activeSessions.delete(target);
+                    await sock.sendMessage(remoteJid, { text: `✅ Session ${target} déconnectée.` });
+                } else { await sock.sendMessage(remoteJid, { text: "❌ Session introuvable." }); }
             }
             return;
         }
 
-        // --- GESTION DE L'HÉBERGEMENT (Prioritaire) ---
         if (hostingStates.has(remoteJid)) {
-            const quoted = msg.message;
-            const type = quoted.imageMessage ? 'image' : (quoted.videoMessage ? 'video' : (quoted.audioMessage ? 'audio' : null));
-            
+            const type = msg.message.imageMessage ? 'image' : (msg.message.videoMessage ? 'video' : (msg.message.audioMessage ? 'audio' : null));
             if (type) {
                 hostingStates.delete(remoteJid);
-                await sock.sendMessage(remoteJid, { text: "⏳ Téléchargement et hébergement sur Catbox en cours..." });
+                await sock.sendMessage(remoteJid, { text: "⏳ Hébergement en cours..." });
                 try {
-                    const buffer = await downloadMediaMessage({ message: quoted }, 'buffer', {}, { logger: pino({ level: 'silent' }) });
+                    const buffer = await downloadMediaMessage(msg, 'buffer', {}, { logger: pino({ level: 'silent' }) });
                     const ext = type === 'image' ? 'png' : (type === 'video' ? 'mp4' : 'mp3');
                     const link = await uploadToCatbox(buffer, `file.${ext}`);
-                    if (link) {
-                        await sock.sendMessage(remoteJid, { text: `✅ *HÉBERGEMENT RÉUSSI*\n\nLien : ${link}` }, { quoted: msg });
-                    } else {
-                        await sock.sendMessage(remoteJid, { text: "❌ Erreur lors de l'hébergement sur Catbox." });
-                    }
-                } catch (e) {
-                    await sock.sendMessage(remoteJid, { text: "❌ Erreur lors du traitement du média." });
-                }
+                    await sock.sendMessage(remoteJid, { text: link ? `✅ *LIEN :* ${link}` : "❌ Erreur Catbox." }, { quoted: msg });
+                } catch (e) { await sock.sendMessage(remoteJid, { text: "❌ Erreur traitement." }); }
                 return;
             }
         }
 
         if (!current.isBotActive) return;
 
-        // --- LOGIQUE DES OUTILS (Seulement si ON) ---
         if (lowerText.startsWith('rappel ')) {
             const input = text.slice(7).trim();
             const match = input.match(/^(\d+)([smhj])\s+(.+)$/i);
-            
             if (match) {
                 const amount = parseInt(match[1]);
                 const unit = match[2].toLowerCase();
                 const task = match[3];
-                
-                let duration = amount;
-                if (unit === 's') duration *= 1000;
-                else if (unit === 'm') duration *= 60 * 1000;
-                else if (unit === 'h') duration *= 60 * 60 * 1000;
-                else if (unit === 'j') duration *= 24 * 60 * 60 * 1000;
-
-                await sock.sendMessage(remoteJid, { text: `✅ Rappel programmé dans *${amount}${unit}* pour : _${task}_` }, { quoted: msg });
-
-                setTimeout(async () => {
-                    await sock.sendMessage(remoteJid, { 
-                        text: `⏰ *RAPPEL* ⏰\n\nBonjour ! C'est l'heure de : *${task}*` 
-                    });
-                }, duration);
-            } else {
-                await sock.sendMessage(remoteJid, { text: "❌ Format incorrect. Exemple : *rappel 10m Faire les courses*" }, { quoted: msg });
+                let duration = amount * (unit === 's' ? 1000 : unit === 'm' ? 60000 : unit === 'h' ? 3600000 : 86400000);
+                await sock.sendMessage(remoteJid, { text: `✅ Rappel dans ${amount}${unit}.` }, { quoted: msg });
+                setTimeout(() => sock.sendMessage(remoteJid, { text: `⏰ *RAPPEL :* ${task}` }), duration);
             }
             return;
         }
-
 
         if (lowerText.startsWith('video ')) {
             const query = text.slice(6).trim();
             if (query) {
                 await sock.sendMessage(remoteJid, { text: "⏳ Téléchargement..." });
                 try {
-                    const audioPath = await downloadYouTubeMP3(query);
-                    await sock.sendMessage(remoteJid, { audio: fs.readFileSync(audioPath), mimetype: 'audio/mp4', fileName: `${query}.mp3` }, { quoted: msg });
-                    fs.unlinkSync(audioPath);
-                } catch (e) { await sock.sendMessage(remoteJid, { text: `❌ ${e}` }); }
+                    const path = await downloadYouTubeMP3(query);
+                    await sock.sendMessage(remoteJid, { audio: fs.readFileSync(path), mimetype: 'audio/mp4' }, { quoted: msg });
+                    fs.unlinkSync(path);
+                } catch (e) { await sock.sendMessage(remoteJid, { text: "❌ Erreur YouTube." }); }
             }
             return;
         }
 
         if (lowerText === 'save' || lowerText === 'vv') {
-            const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
-            if (quoted) {
-                try {
-                    let type = Object.keys(quoted)[0];
-                    if (type.includes('viewOnceMessage')) type = Object.keys(quoted[type].message)[0];
-                    const buffer = await downloadMediaMessage({ message: quoted }, 'buffer', {}, { logger: pino({ level: 'silent' }) });
-                    await sock.sendMessage(remoteJid, { [type === 'imageMessage' ? 'image' : 'video']: buffer, caption: "Fait ✅" }, { quoted: msg });
-                } catch (e) {}
+            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            if (quoted?.viewOnceMessageV2 || quoted?.viewOnceMessage) {
+                const viewOnce = quoted.viewOnceMessageV2 || quoted.viewOnceMessage;
+                const type = viewOnce.message.imageMessage ? 'image' : 'video';
+                const buffer = await downloadMediaMessage({ message: viewOnce.message }, 'buffer', {}, { logger: pino({ level: 'silent' }) });
+                await sock.sendMessage(remoteJid, { [type]: buffer, caption: "✅ Média sauvé !" }, { quoted: msg });
             }
             return;
         }
 
         if (lowerText === 's' || lowerText === 'sticker') {
-            const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage || msg.message;
+            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage || msg.message;
             const type = quoted.imageMessage ? 'image' : (quoted.videoMessage ? 'video' : null);
-            
             if (type) {
-                await sock.sendMessage(remoteJid, { text: "⏳ Création du sticker..." });
                 try {
                     const buffer = await downloadMediaMessage({ message: quoted }, 'buffer', {}, { logger: pino({ level: 'silent' }) });
-                    const sticker = await createSticker(buffer, type);
-                    await sock.sendMessage(remoteJid, { sticker: sticker }, { quoted: msg });
-                } catch (e) {
-                    console.error(e);
-                    await sock.sendMessage(remoteJid, { text: "❌ Erreur lors de la création du sticker." });
-                }
-            } else {
-                await sock.sendMessage(remoteJid, { text: "❌ Veuillez répondre à une image ou une vidéo avec la commande *!s*." });
+                    const tempImg = path.join(TEMP_DIR, `sticker_${Date.now()}.webp`);
+                    if (type === 'image') {
+                        await sharp(buffer).resize(512, 512, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } }).webp().toFile(tempImg);
+                    } else {
+                        const tempVid = path.join(TEMP_DIR, `vid_${Date.now()}.mp4`);
+                        fs.writeFileSync(tempVid, buffer);
+                        await new Promise((resolve, reject) => {
+                            ffmpeg(tempVid).inputOptions(['-t', '10']).complexFilter(['scale=512:512:force_original_aspect_ratio=decrease,fps=15,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=#00000000']).outputOptions(['-vcodec', 'libwebp', '-lossless', '1', '-loop', '0', '-preset', 'default', '-an', '-vsync', '0']).on('end', resolve).on('error', reject).save(tempImg);
+                        });
+                        fs.unlinkSync(tempVid);
+                    }
+                    await sock.sendMessage(remoteJid, { sticker: fs.readFileSync(tempImg) }, { quoted: msg });
+                    fs.unlinkSync(tempImg);
+                } catch (e) { await sock.sendMessage(remoteJid, { text: "❌ Erreur sticker." }); }
             }
             return;
         }
@@ -528,7 +411,7 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
 }
 
 async function start() {
-    console.log("--- DÉMARRAGE STONE 2 (CONNECT SÉCURISÉ) ---");
+    console.log("--- DÉMARRAGE STONE 2 ---");
     const mainNum = await question('Numéro principal : ');
     createBotInstance(mainNum.replace(/[^0-9]/g, ''));
 }
