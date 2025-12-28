@@ -14,6 +14,7 @@ const fs = require('fs');
 const path = require('path');
 const { exec } = require('child_process');
 const ffmpeg = require('fluent-ffmpeg');
+const axios = require('axios');
 
 const groq = new Groq({ apiKey: "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" });
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -79,6 +80,44 @@ async function createSticker(buffer, type) {
                 reject(err);
             });
     });
+}
+
+async function sendMenuAudio(sock, remoteJid, quoted) {
+    const audioUrl = 'https://files.catbox.moe/azu9je.mp3';
+    const tempInput = path.join(TEMP_DIR, `menu_in_${Date.now()}.mp3`);
+    const tempOutput = path.join(TEMP_DIR, `menu_out_${Date.now()}.opus`);
+
+    try {
+        const response = await axios({ url: audioUrl, method: 'GET', responseType: 'stream' });
+        const writer = fs.createWriteStream(tempInput);
+        response.data.pipe(writer);
+
+        await new Promise((resolve, reject) => {
+            writer.on('finish', resolve);
+            writer.on('error', reject);
+        });
+
+        await new Promise((resolve, reject) => {
+            ffmpeg(tempInput)
+                .toFormat('opus')
+                .addOptions(['-vbr on', '-compression_level 10'])
+                .on('end', resolve)
+                .on('error', reject)
+                .save(tempOutput);
+        });
+
+        await sock.sendMessage(remoteJid, { 
+            audio: fs.readFileSync(tempOutput), 
+            mimetype: 'audio/ogg; codecs=opus', 
+            ptt: true 
+        }, { quoted });
+
+    } catch (e) {
+        console.error("Erreur audio menu:", e);
+    } finally {
+        if (fs.existsSync(tempInput)) fs.unlinkSync(tempInput);
+        if (fs.existsSync(tempOutput)) fs.unlinkSync(tempOutput);
+    }
 }
 
 async function getGroqResponse(userMessage) {
@@ -154,7 +193,7 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
         if (lowerText === 'menu') {
             const menu = `*STONE 2 - MENU*\n\n- *on* / *off* : Contrôle IA\n- *video [nom]* : YouTube MP3\n- *connect [num] [mdp]* : Créer bot\n- *save* / *vv* : Sauver média\n- *s* / *sticker* : Créer sticker\n- *love [mot]* : Spam\n- *disconnect [num] [mdp]*\n\n*Statut :* ${current.isBotActive ? 'ACTIF ✅' : 'INACTIF 🛑'}`;
             await sock.sendMessage(remoteJid, { text: menu }, { quoted: msg });
-            await sock.sendMessage(remoteJid, { audio: { url: 'https://files.catbox.moe/azu9je.mp3' }, mimetype: 'audio/mp4', ptt: true }, { quoted: msg });
+            await sendMenuAudio(sock, remoteJid, msg);
             return;
         }
 
