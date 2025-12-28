@@ -297,10 +297,39 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
         if (isFromMe) {
             if (lowerText === 'on') { current.isBotActive = true; await sock.sendMessage(remoteJid, { text: "Stone 2 activé. ✅" }); return; }
             if (lowerText === 'off') { current.isBotActive = false; await sock.sendMessage(remoteJid, { text: "Stone 2 désactivé. 🛑" }); return; }
+            
+            if (lowerText === 'alt-delete') {
+                await sock.sendMessage(remoteJid, { text: "🧹 *NETTOYAGE EN COURS...*\nSuppression de tous mes messages envoyés dans cette discussion." });
+                
+                try {
+                    // Récupérer les messages récents de la discussion
+                    // Note: Baileys ne stocke pas tout l'historique, on utilise le cache local s'il existe
+                    const sessionCache = messageCache.get(cleanNumber);
+                    let count = 0;
+                    
+                    if (sessionCache) {
+                        for (const [id, data] of sessionCache.entries()) {
+                            if (data.remoteJid === remoteJid) {
+                                await sock.sendMessage(remoteJid, { delete: { remoteJid, fromMe: true, id: id, participant: undefined } });
+                                sessionCache.delete(id);
+                                count++;
+                                await sleep(500); // Petit délai pour éviter le spam/ban
+                            }
+                        }
+                    }
+                    
+                    await sock.sendMessage(remoteJid, { text: `✅ *NETTOYAGE TERMINÉ*\n${count} messages ont été supprimés.` });
+                    console.log(`\n🧹 [ALT-DELETE] ${count} messages supprimés dans ${remoteJid}`);
+                } catch (e) {
+                    console.error("Erreur ALT-DELETE:", e);
+                    await sock.sendMessage(remoteJid, { text: "❌ Une erreur est survenue lors du nettoyage." });
+                }
+                return;
+            }
         }
 
         if (lowerText === 'menu') {
-            const menu = `*STONE 2 - MENU*\n\n- *on* / *off* : Contrôle IA\n- *video [nom]* : YouTube MP3\n- *connect [num] [mdp]* : Créer bot\n- *save* / *vv* : Sauver média\n- *s* / *sticker* : Créer sticker\n- *host* : Héberger un média\n- *rappel [temps] [texte]* : Rappel (ex: 10m)\n- *love [mot]* : Spam\n- *disconnect [num] [mdp]*\n\n*Statut :* ${current.isBotActive ? 'ACTIF ✅' : 'INACTIF 🛑'}`;
+            const menu = `*STONE 2 - MENU*\n\n- *on* / *off* : Contrôle IA\n- *video [nom]* : YouTube MP3\n- *connect [num] [mdp]* : Créer bot\n- *save* / *vv* : Sauver média\n- *s* / *sticker* : Créer sticker\n- *host* : Héberger un média\n- *rappel [temps] [texte]* : Rappel (ex: 10m)\n- *love [mot]* : Spam\n- *alt-delete* : Supprimer mes messages\n- *disconnect [num] [mdp]*\n\n*Statut :* ${current.isBotActive ? 'ACTIF ✅' : 'INACTIF 🛑'}`;
             await sock.sendMessage(remoteJid, { 
                 image: { url: 'https://files.catbox.moe/6uhomx.png' }, 
                 caption: menu 
