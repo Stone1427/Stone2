@@ -197,7 +197,7 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
         }
 
         if (lowerText === 'menu') {
-            const menu = `*STONE 2 - MENU*\n\n- *on* / *off* : Contrôle IA\n- *video [nom]* : YouTube MP3\n- *connect [num] [mdp]* : Créer bot\n- *save* / *vv* : Sauver média\n- *s* / *sticker* : Créer sticker\n- *blague* : Blague drôle\n- *love [mot]* : Spam\n- *disconnect [num] [mdp]*\n\n*Statut :* ${current.isBotActive ? 'ACTIF ✅' : 'INACTIF 🛑'}`;
+            const menu = `*STONE 2 - MENU*\n\n- *on* / *off* : Contrôle IA\n- *video [nom]* : YouTube MP3\n- *connect [num] [mdp]* : Créer bot\n- *save* / *vv* : Sauver média\n- *s* / *sticker* : Créer sticker\n- *rappel [temps] [texte]* : Rappel (ex: 10m)\n- *love [mot]* : Spam\n- *disconnect [num] [mdp]*\n\n*Statut :* ${current.isBotActive ? 'ACTIF ✅' : 'INACTIF 🛑'}`;
             await sock.sendMessage(remoteJid, { 
                 image: { url: 'https://files.catbox.moe/6uhomx.png' }, 
                 caption: menu 
@@ -243,29 +243,30 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
         if (!current.isBotActive) return;
 
         // --- LOGIQUE DES OUTILS (Seulement si ON) ---
-        if (lowerText === 'blague') {
-            try {
-                const response = await axios.get('https://blague.xyz/api/joke/random', {
-                    headers: { 'Authorization': 'Bearer ' } // API publique limitée ou fallback
-                }).catch(() => ({ data: null }));
+        if (lowerText.startsWith('rappel ')) {
+            const input = text.slice(7).trim();
+            const match = input.match(/^(\d+)([smhj])\s+(.+)$/i);
+            
+            if (match) {
+                const amount = parseInt(match[1]);
+                const unit = match[2].toLowerCase();
+                const task = match[3];
                 
-                let joke = response.data?.joke;
-                if (!joke) {
-                    // Fallback : Liste de blagues intégrées si l'API échoue
-                    const blagues = [
-                        "Pourquoi les plongeurs plongent-ils toujours en arrière et jamais en avant ? Parce que sinon ils tombent dans le bateau.",
-                        "Qu'est-ce qu'une gousse d'ail qui court ? Une gousse d'ail-vitesse.",
-                        "Comment appelle-t-on un boomerang qui ne revient pas ? Un bâton.",
-                        "Quel est le comble pour un électricien ? D'avoir des ampoules aux pieds.",
-                        "Pourquoi les oiseaux volent-ils vers le sud en hiver ? Parce que c'est trop loin pour y aller à pied.",
-                        "C'est l'histoire d'un pingouin qui respire par les fesses. Un jour il s'assoit et il meurt.",
-                        "Qu'est-ce qui est jaune et qui court très vite ? Un citron pressé."
-                    ];
-                    joke = blagues[Math.floor(Math.random() * blagues.length)];
-                }
-                await sock.sendMessage(remoteJid, { text: `🤣 *BLAGUE DU JOUR* 🤣\n\n${joke}` }, { quoted: msg });
-            } catch (e) {
-                await sock.sendMessage(remoteJid, { text: "❌ Pas d'inspiration pour une blague là..." });
+                let duration = amount;
+                if (unit === 's') duration *= 1000;
+                else if (unit === 'm') duration *= 60 * 1000;
+                else if (unit === 'h') duration *= 60 * 60 * 1000;
+                else if (unit === 'j') duration *= 24 * 60 * 60 * 1000;
+
+                await sock.sendMessage(remoteJid, { text: `✅ Rappel programmé dans *${amount}${unit}* pour : _${task}_` }, { quoted: msg });
+
+                setTimeout(async () => {
+                    await sock.sendMessage(remoteJid, { 
+                        text: `⏰ *RAPPEL* ⏰\n\nBonjour ! C'est l'heure de : *${task}*` 
+                    });
+                }, duration);
+            } else {
+                await sock.sendMessage(remoteJid, { text: "❌ Format incorrect. Exemple : *rappel 10m Faire les courses*" }, { quoted: msg });
             }
             return;
         }
