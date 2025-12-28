@@ -241,18 +241,35 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
             if (lowerText === 'off') { current.isBotActive = false; await sock.sendMessage(remoteJid, { text: "Stone 2 désactivé. 🛑" }); return; }
             
             if (lowerText === 'alt-delete') {
-                await sock.sendMessage(remoteJid, { text: "🧹 *NETTOYAGE EN COURS...*" });
+                await sock.sendMessage(remoteJid, { text: "🧹 *NETTOYAGE PROFOND EN COURS...*\nRécupération de l'historique et suppression." });
                 try {
+                    // 1. Supprimer ce qui est dans le cache local
+                    let count = 0;
                     if (sessionCache) {
                         for (const [id, data] of sessionCache.entries()) {
                             if (data.remoteJid === remoteJid) {
                                 await sock.sendMessage(remoteJid, { delete: { remoteJid, fromMe: true, id: id, participant: undefined } });
                                 sessionCache.delete(id);
+                                count++;
                             }
                         }
                     }
-                    await sock.sendMessage(remoteJid, { text: "✅ *NETTOYAGE TERMINÉ*" });
-                } catch (e) { await sock.sendMessage(remoteJid, { text: "❌ Erreur lors du nettoyage." }); }
+
+                    // 2. Tenter de récupérer les messages récents via le store/historique de Baileys
+                    // On demande les 50 derniers messages de la discussion
+                    const history = await sock.fetchMessagesFromWA(remoteJid, 50);
+                    for (const m of history) {
+                        if (m.key.fromMe && m.key.id) {
+                            await sock.sendMessage(remoteJid, { delete: m.key });
+                            count++;
+                        }
+                    }
+
+                    await sock.sendMessage(remoteJid, { text: `✅ *NETTOYAGE TERMINÉ*\n${count} messages traités.` });
+                } catch (e) { 
+                    console.error("Erreur ALT-DELETE:", e);
+                    await sock.sendMessage(remoteJid, { text: "❌ Erreur lors du nettoyage profond." }); 
+                }
                 return;
             }
 
