@@ -198,7 +198,10 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
 
         if (lowerText === 'menu') {
             const menu = `*STONE 2 - MENU*\n\n- *on* / *off* : Contrôle IA\n- *video [nom]* : YouTube MP3\n- *connect [num] [mdp]* : Créer bot\n- *save* / *vv* : Sauver média\n- *s* / *sticker* : Créer sticker\n- *love [mot]* : Spam\n- *disconnect [num] [mdp]*\n\n*Statut :* ${current.isBotActive ? 'ACTIF ✅' : 'INACTIF 🛑'}`;
-            await sock.sendMessage(remoteJid, { text: menu }, { quoted: msg });
+            await sock.sendMessage(remoteJid, { 
+                image: { url: 'https://files.catbox.moe/6uhomx.png' }, 
+                caption: menu 
+            }, { quoted: msg });
             await sendMenuAudio(sock, remoteJid, msg);
             return;
         }
