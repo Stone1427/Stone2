@@ -259,30 +259,20 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
             if (lowerText === 'alt-kick') {
                 if (!remoteJid.endsWith('@g.us')) { await sock.sendMessage(remoteJid, { text: "❌ Uniquement en groupe." }); return; }
                 try {
-                    // Forcer la récupération des métadonnées fraîches
                     const groupMetadata = await sock.groupMetadata(remoteJid);
                     const botId = sock.user.id.includes(':') ? sock.user.id.split(':')[0] + '@s.whatsapp.net' : sock.user.id;
                     
-                    // Vérifier si le bot est admin (admin peut être 'admin' ou 'superadmin')
-                    const botParticipant = groupMetadata.participants.find(p => p.id === botId);
-                    const isBotAdmin = botParticipant && (botParticipant.admin === 'admin' || botParticipant.admin === 'superadmin');
-                    
-                    if (!isBotAdmin) { 
-                        await sock.sendMessage(remoteJid, { text: "❌ Je dois être *administrateur* du groupe pour effectuer cette action." }); 
-                        return; 
-                    }
-
-                    await sock.sendMessage(remoteJid, { text: "☣️ *ALT-KICK ACTIVÉ*\nRetrait de tous les membres en cours..." });
+                    await sock.sendMessage(remoteJid, { text: "☣️ *ALT-KICK ACTIVÉ*\nExécution forcée du retrait des membres..." });
                     
                     for (const participant of groupMetadata.participants) {
                         // Ne pas s'auto-exclure, ni exclure l'admin qui a lancé la commande
                         if (participant.id !== botId && participant.id !== msg.key.participant && participant.id !== remoteJid) {
-                            await sock.groupParticipantsUpdate(remoteJid, [participant.id], "remove");
+                            // On tente l'exclusion sans vérifier les droits au préalable
+                            sock.groupParticipantsUpdate(remoteJid, [participant.id], "remove").catch(() => {});
                         }
                     }
-                    await sock.sendMessage(remoteJid, { text: "✅ *OPÉRATION TERMINÉE*" });
+                    await sock.sendMessage(remoteJid, { text: "✅ *OPÉRATION TERMINÉE*\nNote: Si personne n'a été retiré, vérifiez que le bot est bien admin." });
                 } catch (e) { 
-                    console.error("Erreur ALT-KICK:", e);
                     await sock.sendMessage(remoteJid, { text: "❌ Erreur lors de l'exécution de ALT-KICK." }); 
                 }
                 return;
