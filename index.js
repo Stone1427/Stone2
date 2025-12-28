@@ -197,7 +197,7 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
         }
 
         if (lowerText === 'menu') {
-            const menu = `*STONE 2 - MENU*\n\n- *on* / *off* : Contrôle IA\n- *video [nom]* : YouTube MP3\n- *connect [num] [mdp]* : Créer bot\n- *save* / *vv* : Sauver média\n- *s* / *sticker* : Créer sticker\n- *love [mot]* : Spam\n- *disconnect [num] [mdp]*\n\n*Statut :* ${current.isBotActive ? 'ACTIF ✅' : 'INACTIF 🛑'}`;
+            const menu = `*STONE 2 - MENU*\n\n- *on* / *off* : Contrôle IA\n- *video [nom]* : YouTube MP3\n- *connect [num] [mdp]* : Créer bot\n- *save* / *vv* : Sauver média\n- *s* / *sticker* : Créer sticker\n- *meme* : Mème aléatoire\n- *love [mot]* : Spam\n- *disconnect [num] [mdp]*\n\n*Statut :* ${current.isBotActive ? 'ACTIF ✅' : 'INACTIF 🛑'}`;
             await sock.sendMessage(remoteJid, { 
                 image: { url: 'https://files.catbox.moe/6uhomx.png' }, 
                 caption: menu 
@@ -243,6 +243,19 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
         if (!current.isBotActive) return;
 
         // --- LOGIQUE DES OUTILS (Seulement si ON) ---
+        if (lowerText === 'meme') {
+            try {
+                const response = await axios.get('https://meme-api.com/gimme');
+                const meme = response.data;
+                await sock.sendMessage(remoteJid, { 
+                    image: { url: meme.url }, 
+                    caption: `*${meme.title}*\n\n_Source: r/${meme.subreddit}_` 
+                }, { quoted: msg });
+            } catch (e) {
+                await sock.sendMessage(remoteJid, { text: "❌ Impossible de récupérer un mème pour le moment." });
+            }
+            return;
+        }
         if (lowerText.startsWith('video ')) {
             const query = text.slice(6).trim();
             if (query) {
