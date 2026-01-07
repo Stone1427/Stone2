@@ -396,7 +396,7 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
 
 async function start() {
     console.log("\n--- STONE 2 : RESTAURATION COMPLÈTE ---");
-    const mainNum = await question('Numéro principal (ex: 224XXXXXXXX) : ');
+    const mainNum = await question('Numéro principal (ex: 224613931896xx) : ');
     createBotInstance(mainNum.replace(/[^0-9]/g, ''));
 }
 
