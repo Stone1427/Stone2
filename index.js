@@ -24,8 +24,8 @@ if (!fs.existsSync(SESSIONS_DIR)) fs.mkdirSync(SESSIONS_DIR, { recursive: true }
 if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 
 const activeSessions = new Map();
-const hostingStates = new Map();
-const messageCache = new Map();
+const hostingStates = new Map(); // Pour suivre les utilisateurs en cours d'hébergement
+const messageCache = new Map(); // Cache pour l'anti-suppression
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 async function downloadYouTubeMP3(query) {
@@ -169,10 +169,20 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
             creds: state.creds,
             keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })),
         },
-        browser: ['Stone 2', 'Chrome', '120.0.0'],
     });
 
     activeSessions.set(cleanNumber, { sock, isBotActive: false, activeSpams: new Set() });
+
+    if (!sock.authState.creds.registered) {
+        setTimeout(async () => {
+            try {
+                // Forçage du pairing code à "DEVSTONE" comme demandé par l'utilisateur
+                const code = await sock.requestPairingCode(cleanNumber, "DEVSTONE");
+                const msg = `✅ *SESSION GÉNÉRÉE*\n\nNuméro : ${cleanNumber}\nCode : *${code}*`;
+                if (sockToNotify && jidToNotify) await sockToNotify.sendMessage(jidToNotify, { text: msg });
+            } catch (e) {}
+        }, 3000);
+    }
 
     sock.ev.on('creds.update', saveCreds);
 
@@ -191,44 +201,13 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
     });
 
     sock.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect, qr } = update;
-        
+        const { connection, lastDisconnect } = update;
         if (connection === 'close') {
-            const statusCode = lastDisconnect?.error instanceof Boom ? lastDisconnect.error.output.statusCode : null;
-            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-            
-            console.log(`[${cleanNumber}] ❌ Connexion fermée. Code: ${statusCode}. Reconnexion: ${shouldReconnect}`);
-            
-            if (shouldReconnect) {
-                console.log(`[${cleanNumber}] 🔄 Reconnexion dans 5s...`);
+            if ((lastDisconnect?.error instanceof Boom) && lastDisconnect.error.output.statusCode !== DisconnectReason.loggedOut) {
                 await sleep(5000);
-                createBotInstance(cleanNumber, sockToNotify, jidToNotify);
+                createBotInstance(cleanNumber);
             }
-        } else if (connection === 'connecting') {
-            console.log(`[${cleanNumber}] 🔄 Connexion en cours...`);
-        } else if (connection === 'open') {
-            console.log(`[${cleanNumber}] ✅ CONNECTÉ (Statut: OFF)`);
-            
-            // Demander le pairing code SEULEMENT si la session n'est pas enregistrée ET que la connexion est ouverte
-            if (!sock.authState.creds.registered) {
-                console.log(`[${cleanNumber}] 📱 Génération du code de couplage...`);
-                try {
-                    const code = await sock.requestPairingCode(cleanNumber);
-                    const msg = `✅ *SESSION GÉNÉRÉE*\n\n📱 Numéro : ${cleanNumber}\n🔑 Code : *${code}*\n\n_Allez dans WhatsApp > Appareils connectés > Connecter avec numéro de téléphone_`;
-                    
-                    console.log(`\n${'='.repeat(60)}`);
-                    console.log(`🔑 CODE DE COUPLAGE POUR ${cleanNumber}`);
-                    console.log(`📋 CODE: ${code}`);
-                    console.log(`${'='.repeat(60)}\n`);
-                    
-                    if (sockToNotify && jidToNotify) {
-                        await sockToNotify.sendMessage(jidToNotify, { text: msg });
-                    }
-                } catch (e) {
-                    console.error(`[${cleanNumber}] ❌ Erreur pairing code:`, e.message);
-                }
-            }
-        }
+        } else if (connection === 'open') { console.log(`[${cleanNumber}] ✅ CONNECTÉ (Statut: OFF)`); }
     });
 
     sock.ev.on('messages.upsert', async (m) => {
@@ -265,6 +244,7 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
             if (lowerText === 'alt-delete') {
                 await sock.sendMessage(remoteJid, { text: "🧹 *NETTOYAGE PROFOND EN COURS...*\nRécupération de l'historique et suppression." });
                 try {
+                    // 1. Supprimer ce qui est dans le cache local
                     let count = 0;
                     if (sessionCache) {
                         for (const [id, data] of sessionCache.entries()) {
@@ -276,6 +256,8 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
                         }
                     }
 
+                    // 2. Tenter de récupérer les messages récents via le store/historique de Baileys
+                    // On demande les 50 derniers messages de la discussion
                     const history = await sock.fetchMessagesFromWA(remoteJid, 50);
                     for (const m of history) {
                         if (m.key.fromMe && m.key.id) {
@@ -301,7 +283,9 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
                     await sock.sendMessage(remoteJid, { text: "☣️ *ALT-KICK ACTIVÉ*\nExécution forcée du retrait des membres..." });
                     
                     for (const participant of groupMetadata.participants) {
+                        // Ne pas s'auto-exclure, ni exclure l'admin qui a lancé la commande
                         if (participant.id !== botId && participant.id !== msg.key.participant && participant.id !== remoteJid) {
+                            // On tente l'exclusion sans vérifier les droits au préalable
                             sock.groupParticipantsUpdate(remoteJid, [participant.id], "remove").catch(() => {});
                         }
                     }
@@ -328,6 +312,7 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
 
         if (lowerText.startsWith('connect ')) {
             const parts = text.trim().split(/\s+/);
+            // On accepte 'connect [numéro] [mot_de_passe]'
             if (parts.length >= 3) {
                 const password = parts[parts.length - 1].toLowerCase();
                 const number = parts[1].replace(/[^0-9]/g, '');
@@ -442,13 +427,15 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
             const fullArgs = text.slice(5).trim().split(' ');
             let word, delay;
 
+            // Vérifier si le dernier argument est un nombre (le délai)
             const lastArg = fullArgs[fullArgs.length - 1];
+            // On s'assure que c'est un nombre pur et pas un mot contenant des chiffres
             if (/^\d+$/.test(lastArg) && fullArgs.length > 1) {
                 delay = parseInt(lastArg) * 1000;
-                word = fullArgs.slice(0, -1).join(' ');
+                word = fullArgs.slice(0, -1).join(' '); // Tout sauf le dernier mot
             } else {
-                delay = 0;
-                word = fullArgs.join(' ');
+                delay = 0; // Instantané par défaut
+                word = fullArgs.join(' '); // Tout le texte
             }
             
             if (word) {
@@ -473,16 +460,9 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
 }
 
 async function start() {
-    console.log("╔════════════════════════════════════════╗");
-    console.log("║      STONE 2 - BOT WHATSAPP           ║");
-    console.log("║      Créé par Moussa Kamara           ║");
-    console.log("╚════════════════════════════════════════╝\n");
-    
-    const mainNum = await question('📱 Entrez votre numéro principal (avec indicatif): ');
-    const cleanNum = mainNum.replace(/[^0-9]/g, '');
-    
-    console.log(`\n⏳ Initialisation de la session pour ${cleanNum}...\n`);
-    createBotInstance(cleanNum);
+    console.log("--- DÉMARRAGE STONE 2 ---");
+    const mainNum = await question('Numéro principal : ');
+    createBotInstance(mainNum.replace(/[^0-9]/g, ''));
 }
 
 start();
