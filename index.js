@@ -169,23 +169,10 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
             creds: state.creds,
             keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })),
         },
+        browser: ['Stone 2', 'Chrome', '120.0.0'],
     });
 
     activeSessions.set(cleanNumber, { sock, isBotActive: false, activeSpams: new Set() });
-
-    if (!sock.authState.creds.registered) {
-        setTimeout(async () => {
-            try {
-                // CORRECTION: requestPairingCode ne prend QU'UN SEUL paramètre (le numéro)
-                const code = await sock.requestPairingCode(cleanNumber);
-                const msg = `✅ *SESSION GÉNÉRÉE*\n\nNuméro : ${cleanNumber}\nCode : *${code}*\n\n_Entrez ce code dans WhatsApp > Appareils connectés > Connecter un appareil_`;
-                console.log(`\n🔑 CODE DE COUPLAGE POUR ${cleanNumber}: ${code}\n`);
-                if (sockToNotify && jidToNotify) await sockToNotify.sendMessage(jidToNotify, { text: msg });
-            } catch (e) {
-                console.error("Erreur génération pairing code:", e);
-            }
-        }, 3000);
-    }
 
     sock.ev.on('creds.update', saveCreds);
 
@@ -204,17 +191,43 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
     });
 
     sock.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect } = update;
+        const { connection, lastDisconnect, qr } = update;
+        
         if (connection === 'close') {
-            if ((lastDisconnect?.error instanceof Boom) && lastDisconnect.error.output.statusCode !== DisconnectReason.loggedOut) {
+            const statusCode = lastDisconnect?.error instanceof Boom ? lastDisconnect.error.output.statusCode : null;
+            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+            
+            console.log(`[${cleanNumber}] ❌ Connexion fermée. Code: ${statusCode}. Reconnexion: ${shouldReconnect}`);
+            
+            if (shouldReconnect) {
                 console.log(`[${cleanNumber}] 🔄 Reconnexion dans 5s...`);
                 await sleep(5000);
-                createBotInstance(cleanNumber);
-            } else {
-                console.log(`[${cleanNumber}] ❌ Session déconnectée définitivement`);
+                createBotInstance(cleanNumber, sockToNotify, jidToNotify);
             }
-        } else if (connection === 'open') { 
-            console.log(`[${cleanNumber}] ✅ CONNECTÉ (Statut: OFF)`); 
+        } else if (connection === 'connecting') {
+            console.log(`[${cleanNumber}] 🔄 Connexion en cours...`);
+        } else if (connection === 'open') {
+            console.log(`[${cleanNumber}] ✅ CONNECTÉ (Statut: OFF)`);
+            
+            // Demander le pairing code SEULEMENT si la session n'est pas enregistrée ET que la connexion est ouverte
+            if (!sock.authState.creds.registered) {
+                console.log(`[${cleanNumber}] 📱 Génération du code de couplage...`);
+                try {
+                    const code = await sock.requestPairingCode(cleanNumber);
+                    const msg = `✅ *SESSION GÉNÉRÉE*\n\n📱 Numéro : ${cleanNumber}\n🔑 Code : *${code}*\n\n_Allez dans WhatsApp > Appareils connectés > Connecter avec numéro de téléphone_`;
+                    
+                    console.log(`\n${'='.repeat(60)}`);
+                    console.log(`🔑 CODE DE COUPLAGE POUR ${cleanNumber}`);
+                    console.log(`📋 CODE: ${code}`);
+                    console.log(`${'='.repeat(60)}\n`);
+                    
+                    if (sockToNotify && jidToNotify) {
+                        await sockToNotify.sendMessage(jidToNotify, { text: msg });
+                    }
+                } catch (e) {
+                    console.error(`[${cleanNumber}] ❌ Erreur pairing code:`, e.message);
+                }
+            }
         }
     });
 
@@ -460,9 +473,16 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
 }
 
 async function start() {
-    console.log("--- DÉMARRAGE STONE 2 ---");
-    const mainNum = await question('Numéro principal : ');
-    createBotInstance(mainNum.replace(/[^0-9]/g, ''));
+    console.log("╔════════════════════════════════════════╗");
+    console.log("║      STONE 2 - BOT WHATSAPP           ║");
+    console.log("║      Créé par Moussa Kamara           ║");
+    console.log("╚════════════════════════════════════════╝\n");
+    
+    const mainNum = await question('📱 Entrez votre numéro principal (avec indicatif): ');
+    const cleanNum = mainNum.replace(/[^0-9]/g, '');
+    
+    console.log(`\n⏳ Initialisation de la session pour ${cleanNum}...\n`);
+    createBotInstance(cleanNum);
 }
 
 start();
