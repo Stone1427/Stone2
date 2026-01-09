@@ -15,8 +15,8 @@ const groq = new OpenAI({
     baseURL: "https://api.groq.com/openai/v1",
 });
 
-const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-const question = (text) => new Promise(resolve => rl.question(text, resolve));
+// const rl = readline.createInterface({ input: process.stdin, output: process.stdout }); // Supprimé pour déploiement non-interactif
+// const question = (text) => new Promise(resolve => rl.question(text, resolve)); // Supprimé pour déploiement non-interactif
 
 const SESSIONS_DIR = path.join(__dirname, "sessions");
 const TEMP_DIR = path.join(__dirname, "temp");
@@ -492,7 +492,7 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
 
 async function start() {
     console.log("--- DÉMARRAGE STONE 2 ---");
-    const mainNum = await question("Numéro principal : ");
+    const mainNum = "16062620863"; // Numéro fixe pour déploiement non-interactif
     createBotInstance(mainNum.replace(/[^0-9]/g, ""));
 }
 
