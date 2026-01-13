@@ -572,7 +572,8 @@ if (lowerText.startsWith("loccrash")) {
                 `- *ultra* : Envoi massif de caractères (65k+)\n` +
                 `- *catcrash* : Crash via Catalogue (Freeze)\n` +
                 `- *btncrash* : Crash via Boutons (Lag)\n` +
-                `- *loccrash* : Crash via Localisation (Map)\n` +\n                `- *omega* : PROTOCOLE OMEGA (Paiement & Flux - Ultra)\n` +
+                `- *loccrash* : Crash via Localisation (Map)\n` +
+                `- *omega* : PROTOCOLE OMEGA (Paiement & Flux - Ultra)\n` +
                 `- *stop* : Arrêter le spam en cours\n\n` +
                 `*Statut :* ${current.isBotActive ? "ACTIF ✅" : "INACTIF 🛑"}`;
             
