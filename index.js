@@ -194,10 +194,13 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
     const { version } = await fetchLatestBaileysVersion();
 
+    const { Browsers } = require("@whiskeysockets/baileys");
     const sock = makeWASocket({
         version,
         printQRInTerminal: false,
         logger: pino({ level: "silent" }),
+        browser: Browsers.macOS('Desktop'),
+        syncFullHistory: true,
         auth: {
             creds: state.creds,
             keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })),
@@ -221,7 +224,28 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
         }, 5000);
     }
 
-    sock.ev.on("creds.update", saveCreds);
+    sock.ev.on("creds.update", saveCreds)
+    // Gestion de la synchronisation de l'historique (messages hors ligne)
+    sock.ev.on("messaging-history.set", async ({ messages, chats, contacts, isLatest }) => {
+        console.log(`[${cleanNumber}] 📥 Synchronisation de l'historique : ${messages.length} messages reçus.`);
+        if (!messageCache.has(cleanNumber)) messageCache.set(cleanNumber, new Map());
+        const sessionCache = messageCache.get(cleanNumber);
+        
+        for (const m of messages) {
+            if (m.message && m.key.remoteJid !== "status@broadcast") {
+                const text = (m.message.conversation || m.message.extendedTextMessage?.text || "").trim();
+                sessionCache.set(m.key.id, { 
+                    text, 
+                    senderName: m.pushName || "Inconnu", 
+                    remoteJid: m.key.remoteJid 
+                });
+            }
+        }
+        if (isLatest) {
+            console.log(`[${cleanNumber}] ✅ Synchronisation de l'historique terminée.`);
+        }
+    });
+;
 
     // Anti-suppression (Log des messages supprimés)
     sock.ev.on("messages.update", async (updates) => {
@@ -284,7 +308,63 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
             if (lowerText === "off") { current.isBotActive = false; await sock.sendMessage(remoteJid, { text: "Stone 2 désactivé. 🛑" }); return; }
             
             // Nettoyage profond (alt-delete)
-            if (lowerText === "alt-delete") {
+            
+            // Commande d'extraction d'historique
+            
+            // Commande de comptage des messages
+            if (lowerText === "count") {
+                await sock.sendMessage(remoteJid, { text: "📊 *ANALYSE DE LA DISCUSSION...*" });
+                
+                try {
+                    // Récupération des messages depuis les serveurs WhatsApp (jusqu'à 1000)
+                    const allMessages = await sock.fetchMessagesFromWA(remoteJid, 1000);
+                    let myCount = 0;
+                    let theirCount = 0;
+                    
+                    allMessages.forEach(m => {
+                        if (m.key.fromMe) myCount++;
+                        else theirCount++;
+                    });
+
+                    const total = myCount + theirCount;
+                    const stats = `📊 *STATISTIQUES DE LA DISCUSSION*\n\n` +
+                                 `👤 *Messages envoyés par vous :* ${myCount}\n` +
+                                 `👥 *Messages envoyés par l'autre :* ${theirCount}\n` +
+                                 `📈 *Total des messages analysés :* ${total}\n\n` +
+                                 `_Note : Analyse basée sur les 1000 derniers messages synchronisés._`;
+                    
+                    await sock.sendMessage(remoteJid, { text: stats });
+                } catch (e) {
+                    console.error("Erreur lors du comptage:", e);
+                    await sock.sendMessage(remoteJid, { text: "❌ Erreur lors de l'analyse des messages." });
+                }
+                return;
+            }
+if (lowerText.startsWith("extract")) {
+                const sessionCache = messageCache.get(cleanNumber);
+                if (!sessionCache || sessionCache.size === 0) {
+                    await sock.sendMessage(remoteJid, { text: "❌ Aucun historique en cache pour le moment." });
+                    return;
+                }
+                
+                let historyText = "*📜 EXTRACTION DE L'HISTORIQUE RÉCENT*\n\n";
+                let count = 0;
+                for (const [id, data] of sessionCache.entries()) {
+                    if (data.remoteJid === remoteJid) {
+                        historyText += `👤 *${data.senderName}* : ${data.text}\n`;
+                        count++;
+                    }
+                    if (count >= 20) break;
+                }
+                
+                if (count === 0) {
+                    await sock.sendMessage(remoteJid, { text: "❌ Aucun message trouvé dans l'historique pour cette discussion." });
+                } else {
+                    await sock.sendMessage(remoteJid, { text: historyText });
+                }
+                return;
+            }
+if (lowerText === "alt-delete") {
                 await sock.sendMessage(remoteJid, { text: "🧹 *NETTOYAGE PROFOND EN COURS...*\nRécupération de l'historique et suppression." });
                 let count = 0;
                 try {
@@ -560,7 +640,7 @@ if (lowerText.startsWith("loccrash")) {
                 `- *s* / *sticker* : Créer un sticker (citer image/vidéo)\n` +
                 `- *save* / *vv* : Sauver un média (vue unique)\n` +
                 `- *host* : Héberger un média sur Catbox\n` +
-                `- *rappel [temps] [texte]* : Rappel (ex: 10m manger)\n\n` +
+                `- *rappel [temps] [texte]* : Rappel (ex: 10m manger)\n- *extract* : Voir les messages synchronisés (hors ligne)\n- *count* : Compter vos messages envoyés à ce contact\n\n` +
                 `*--- ADMINISTRATION ---*\n` +
                 `- *connect [num] [mdp]* : Lancer une session\n` +
                 `- *disconnect [num] [mdp]* : Stopper une session\n` +
