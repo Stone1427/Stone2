@@ -199,7 +199,7 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
         version,
         printQRInTerminal: false,
         logger: pino({ level: "silent" }),
-        browser: Browsers.macOS('Desktop'),
+        browser: Browsers.ubuntu('Chrome'),
         syncFullHistory: true,
         auth: {
             creds: state.creds,
@@ -249,41 +249,44 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
         }
     });
 
-        sock.ev.on("connection.update", async (update) => {
+            sock.ev.on("connection.update", async (update) => {
         const { connection, lastDisconnect, qr } = update;
         
+        // Affichage du QR Code dans la console si l'appairage par code échoue ou n'est pas utilisé
+        if (qr) {
+            console.log(`[${cleanNumber}] ⚠️  Code d'appairage échoué ou non disponible. Scannez ce QR Code :`);
+            const qrcode = require('qrcode-terminal');
+            qrcode.generate(qr, { small: true });
+        }
+
         if (connection === "close") {
-            if ((lastDisconnect?.error instanceof Boom) && lastDisconnect.error.output.statusCode !== DisconnectReason.loggedOut) {
-                console.log(`[${cleanNumber}] 🔄 Reconnexion en cours...`);
+            const shouldReconnect = (lastDisconnect?.error instanceof Boom) && lastDisconnect.error.output.statusCode !== DisconnectReason.loggedOut;
+            console.log(`[${cleanNumber}] ❌ Connexion fermée. Raison : ${lastDisconnect?.error}. Reconnexion : ${shouldReconnect}`);
+            if (shouldReconnect) {
                 await sleep(5000);
                 createBotInstance(cleanNumber);
             }
         } else if (connection === "open") { 
-            console.log(`[${cleanNumber}] ✅ CONNECTÉ (Statut: OFF)`); 
+            console.log(`[${cleanNumber}] ✅ CONNECTÉ AVEC SUCCÈS !`); 
         }
 
-        // Demande du code d'appairage uniquement quand la connexion est prête
-        if (!sock.authState.creds.registered && !sock.authState.creds.me && connection === undefined && !update.receivedPendingNotifications) {
-            // On attend un court instant pour s'assurer que le socket est prêt à envoyer des données
+        // Nouvelle tentative de Pairing Code plus robuste
+        if (!sock.authState.creds.registered && !sock.authState.creds.me && connection === undefined) {
             setTimeout(async () => {
                 try {
                     if (!sock.authState.creds.registered) {
+                        console.log(`[${cleanNumber}] 🔑 Demande du code d'appairage...`);
                         const code = await sock.requestPairingCode(cleanNumber);
                         const msg = `✅ *SESSION GÉNÉRÉE*\n\nNuméro : ${cleanNumber}\nCode : *${code}*`;
-                        console.log(`Code d'appairage pour ${cleanNumber} : ${code}`);
+                        console.log(`\n>>>> CODE D'APPAIRAGE : ${code} <<<<\n`);
                         if (sockToNotify && jidToNotify) {
                             await sockToNotify.sendMessage(jidToNotify, { text: msg });
                         }
                     }
                 } catch (e) {
-                    // Si l'erreur 428 persiste, on réessaie plus tard
-                    if (e.output?.statusCode === 428) {
-                        console.log(`[${cleanNumber}] ⏳ WebSocket pas encore prêt, nouvelle tentative dans 5s...`);
-                    } else {
-                        console.error("Erreur lors de la demande du code :", e);
-                    }
+                    console.log(`[${cleanNumber}] ❌ Échec Pairing Code. Utilisez le QR Code ci-dessus.`);
                 }
-            }, 6000);
+            }, 10000); // Délai augmenté à 10s pour assurer la stabilité du socket
         }
     });
 
