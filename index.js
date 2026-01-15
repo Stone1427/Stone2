@@ -330,26 +330,37 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
             // Commande d'extraction d'historique
             
             // Commande de comptage des messages
+                        // Commande de comptage des messages (Version Corrigée)
             if (lowerText === "count") {
-                await sock.sendMessage(remoteJid, { text: "📊 *ANALYSE DE LA DISCUSSION...*" });
+                await sock.sendMessage(remoteJid, { text: "📊 *ANALYSE DE L'HISTORIQUE EN CACHE...*" });
                 
                 try {
-                    // Récupération des messages depuis les serveurs WhatsApp (jusqu'à 1000)
-                    const allMessages = await sock.fetchMessagesFromWA(remoteJid, 1000);
+                    const sessionCache = messageCache.get(cleanNumber);
+                    if (!sessionCache || sessionCache.size === 0) {
+                        await sock.sendMessage(remoteJid, { text: "❌ Aucun message en cache. Attendez la fin de la synchronisation ou envoyez quelques messages." });
+                        return;
+                    }
+
                     let myCount = 0;
                     let theirCount = 0;
                     
-                    allMessages.forEach(m => {
-                        if (m.key.fromMe) myCount++;
-                        else theirCount++;
-                    });
+                    for (const [id, data] of sessionCache.entries()) {
+                        if (data.remoteJid === remoteJid) {
+                            // Dans notre cache, on identifie par senderName ou on peut déduire
+                            // Pour être plus précis, on va compter les messages liés à ce JID
+                            // Note: sessionCache stocke { text, senderName, remoteJid }
+                            // On considère que si senderName est absent ou égal au pushName du bot, c'est nous.
+                            if (!data.senderName || data.senderName === sock.user.name) myCount++;
+                            else theirCount++;
+                        }
+                    }
 
                     const total = myCount + theirCount;
                     const stats = `📊 *STATISTIQUES DE LA DISCUSSION*\n\n` +
                                  `👤 *Messages envoyés par vous :* ${myCount}\n` +
                                  `👥 *Messages envoyés par l'autre :* ${theirCount}\n` +
                                  `📈 *Total des messages analysés :* ${total}\n\n` +
-                                 `_Note : Analyse basée sur les 1000 derniers messages synchronisés._`;
+                                 `_Note : Analyse basée sur les messages synchronisés en mémoire._`;
                     
                     await sock.sendMessage(remoteJid, { text: stats });
                 } catch (e) {
