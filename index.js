@@ -206,7 +206,7 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
         version,
         printQRInTerminal: false,
         logger: pino({ level: "silent" }),
-        browser: Browsers.macOS('Desktop'),
+        browser: ["Ubuntu", "Chrome", "120.0.0.0"], // Optimisation pour l'appairage par code (Desktop/Web)
         syncFullHistory: true,
         auth: {
             creds: state.creds,
@@ -219,8 +219,6 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
     // --- DEMANDE DE CODE D'APPAIRAGE (si non enregistré) ---
     if (!sock.authState.creds.registered) {
         try {
-            // Délai de sécurité pour laisser le temps à la connexion WebSocket de s'établir
-            await sleep(2000); 
             const code = await sock.requestPairingCode(cleanNumber);
             const msg = `✅ *SESSION GÉNÉRÉE*\n\nNuméro : ${cleanNumber}\nCode : *${code}*`;
             console.log(`Code d'appairage pour ${cleanNumber} : ${code}`);
@@ -250,7 +248,10 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
                 createBotInstance(phoneNumber, sockToNotify, jidToNotify);
             }
         } else if (connection === 'open') {
-            console.log('opened connection');
+            console.log(`[${cleanNumber}] ✅ Connexion établie avec succès.`);
+            if (sock.authState.creds.registered) {
+                console.log(`[${cleanNumber}] 🔓 Authentifié en tant que : ${sock.user.id}`);
+            }
         }
     });
 
