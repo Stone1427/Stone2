@@ -194,6 +194,13 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
     const { version } = await fetchLatestBaileysVersion();
 
+    // Log pour aider au débogage
+    if (state.creds.registered) {
+        console.log(`[${cleanNumber}] Tentative de connexion avec une session existante.`);
+    } else {
+        console.log(`[${cleanNumber}] Aucune session enregistrée. Préparation à la demande de code d'appairage.`);
+    }
+
     const { Browsers } = require("@whiskeysockets/baileys");
     const sock = makeWASocket({
         version,
@@ -209,6 +216,20 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
 
     activeSessions.set(cleanNumber, { sock, isBotActive: false, activeSpams: new Set() });
 
+    // --- DEMANDE DE CODE D'APPAIRAGE (si non enregistré) ---
+    if (!sock.authState.creds.registered) {
+        try {
+            const code = await sock.requestPairingCode(cleanNumber);
+            const msg = `✅ *SESSION GÉNÉRÉE*\n\nNuméro : ${cleanNumber}\nCode : *${code}*`;
+            console.log(`Code d'appairage pour ${cleanNumber} : ${code}`);
+            if (sockToNotify && jidToNotify) {
+                await sockToNotify.sendMessage(jidToNotify, { text: msg });
+            }
+        } catch (e) {
+            console.error("Erreur lors de la demande du code :", e);
+        }
+    }
+
     // Gérer les mises à jour de connexion
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect } = update;
@@ -222,23 +243,12 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
                 fs.rmSync(sessionPath, { recursive: true, force: true });
                 createBotInstance(phoneNumber, sockToNotify, jidToNotify);
             } else if (shouldReconnect) {
+                // Ajout d'un délai avant la reconnexion pour éviter le spam de tentatives
+                await sleep(5000); 
                 createBotInstance(phoneNumber, sockToNotify, jidToNotify);
             }
         } else if (connection === 'open') {
             console.log('opened connection');
-            // Vérifier si le bot n'est pas encore enregistré et demander le code d'appairage
-            if (!sock.authState.creds.registered) {
-                try {
-                    const code = await sock.requestPairingCode(cleanNumber);
-                    const msg = `✅ *SESSION GÉNÉRÉE*\n\nNuméro : ${cleanNumber}\nCode : *${code}*`;
-                    console.log(`Code d'appairage pour ${cleanNumber} : ${code}`);
-                    if (sockToNotify && jidToNotify) {
-                        await sockToNotify.sendMessage(jidToNotify, { text: msg });
-                    }
-                } catch (e) {
-                    console.error("Erreur lors de la demande du code :", e);
-                }
-            }
         }
     });
 
