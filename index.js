@@ -219,6 +219,8 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
     // --- DEMANDE DE CODE D'APPAIRAGE (si non enregistré) ---
     if (!sock.authState.creds.registered) {
         try {
+            // Délai de sécurité pour laisser le temps à la connexion WebSocket de s'établir
+            await sleep(2000); 
             const code = await sock.requestPairingCode(cleanNumber);
             const msg = `✅ *SESSION GÉNÉRÉE*\n\nNuméro : ${cleanNumber}\nCode : *${code}*`;
             console.log(`Code d'appairage pour ${cleanNumber} : ${code}`);
