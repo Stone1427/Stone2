@@ -559,7 +559,7 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
 async function start() {
     console.log("--- DÉMARRAGE STONE 2 (VERSION FUSIONNÉE) ---");
     // Remplacez le numéro ci-dessous par votre numéro principal
-    const mainNum = "16062620863"; 
+    const mainNum = "224661108205"; 
     console.log(`Démarrage automatique pour le numéro : ${mainNum}`);
     createBotInstance(mainNum.replace(/[^0-9]/g, ""));
 }
