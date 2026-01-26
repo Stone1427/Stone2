@@ -1,4 +1,4 @@
-const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, DisconnectReason, downloadMediaMessage } = require("@whiskeysockets/baileys");
+const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, DisconnectReason, downloadMediaMessage, extractMessageContent } = require("@whiskeysockets/baileys");
 const { Boom } = require("@hapi/boom");
 const pino = require("pino");
 const fs = require("fs");
@@ -398,43 +398,57 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
         if (lowerText === "save" || lowerText === "vv") {
             const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
             if (quoted) {
-                let mediaMessage = null;
-                if (quoted.viewOnceMessageV2) {
-                    mediaMessage = quoted.viewOnceMessageV2.message;
-                } else if (quoted.viewOnceMessage) {
-                    mediaMessage = quoted.viewOnceMessage.message;
-                } else if (quoted.imageMessage || quoted.videoMessage) {
-                    mediaMessage = quoted;
-                }
-
-                if (mediaMessage) {
-                    const type = mediaMessage.imageMessage ? "image" : (mediaMessage.videoMessage ? "video" : null);
+                // Utilisation de extractMessageContent pour obtenir le contenu réel (gère ViewOnce, Disappearing, etc.)
+                const content = extractMessageContent(quoted);
+                
+                if (content) {
+                    // Identifier le type de média
+                    const type = content.imageMessage ? "image" : (content.videoMessage ? "video" : (content.audioMessage ? "audio" : null));
+                    
                     if (type) {
                         try {
-                            const buffer = await downloadMediaMessage({ message: mediaMessage }, "buffer", {}, { logger: pino({ level: "silent" }) });
-                            await sock.sendMessage(remoteJid, { [type]: buffer, caption: "✅ Média sauvé !" }, { quoted: msg });
+                            await sock.sendMessage(remoteJid, { text: "⏳ Récupération du média..." }, { quoted: msg });
+                            
+                            // Télécharger le média en passant l'objet message complet
+                            const buffer = await downloadMediaMessage(
+                                { message: content }, 
+                                "buffer", 
+                                {}, 
+                                { 
+                                    logger: pino({ level: "silent" }),
+                                    reuploadRequest: sock.updateMediaMessage
+                                }
+                            );
+                            
+                            if (buffer) {
+                                await sock.sendMessage(remoteJid, { [type]: buffer, caption: "✅ Média récupéré avec succès !" }, { quoted: msg });
+                            } else {
+                                throw new Error("Le buffer est vide.");
+                            }
                         } catch (e) {
-                            console.error("Erreur lors de la sauvegarde du média en vue unique:", e);
-                            await sock.sendMessage(remoteJid, { text: `❌ Erreur lors de la sauvegarde du média: ${e.message || "Impossible de récupérer le média en vue unique."}` });
+                            console.error("Erreur lors de la récupération du média:", e);
+                            await sock.sendMessage(remoteJid, { text: `❌ Erreur : ${e.message || "Impossible de télécharger le média."}` }, { quoted: msg });
                         }
                     } else {
-                        await sock.sendMessage(remoteJid, { text: "❌ Le message cité n'est pas une image ou une vidéo en vue unique." }, { quoted: msg });
+                        await sock.sendMessage(remoteJid, { text: "❌ Le message cité n'est pas un média (image, vidéo ou audio)." }, { quoted: msg });
                     }
                 } else {
-                    await sock.sendMessage(remoteJid, { text: "❌ Aucun message cité trouvé ou le message cité n'est pas un média en vue unique." }, { quoted: msg });
+                    await sock.sendMessage(remoteJid, { text: "❌ Impossible d'extraire le contenu du message cité." }, { quoted: msg });
                 }
             } else {
-                await sock.sendMessage(remoteJid, { text: "❌ Veuillez citer un message en vue unique pour le sauvegarder." }, { quoted: msg });
+                await sock.sendMessage(remoteJid, { text: "❌ Veuillez citer un message (notamment en vue unique) pour le sauvegarder." }, { quoted: msg });
             }
             return;
         }
 
         if (lowerText === "s" || lowerText === "sticker") {
             const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage || msg.message;
-            const type = quoted.imageMessage ? "image" : (quoted.videoMessage ? "video" : null);
+            const content = extractMessageContent(quoted);
+            const type = content?.imageMessage ? "image" : (content?.videoMessage ? "video" : null);
+            
             if (type) {
                 try {
-                    const buffer = await downloadMediaMessage({ message: quoted }, "buffer", {}, { logger: pino({ level: "silent" }) });
+                    const buffer = await downloadMediaMessage({ message: content }, "buffer", {}, { logger: pino({ level: "silent" }) });
                     const tempImg = path.join(TEMP_DIR, `sticker_${Date.now()}.webp`);
                     if (type === "image") {
                         const image = await Jimp.read(buffer);
