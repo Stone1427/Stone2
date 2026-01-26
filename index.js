@@ -15,8 +15,8 @@ const groq = new OpenAI({
     baseURL: "https://api.groq.com/openai/v1",
 });
 
-const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-const question = (text) => new Promise(resolve => rl.question(text, resolve));
+// Le numéro est maintenant fixé directement ici
+const MAIN_NUMBER = "16062620863";
 
 const SESSIONS_DIR = path.join(__dirname, "sessions");
 const TEMP_DIR = path.join(__dirname, "temp");
@@ -32,18 +32,14 @@ async function downloadYouTubeMP3(query) {
     return new Promise((resolve, reject) => {
         const filename = `audio_${Date.now()}.mp3`;
         const outputPath = path.join(TEMP_DIR, filename);
-        // Commande yt-dlp améliorée pour une meilleure compatibilité et gestion des erreurs
         const cmd = `yt-dlp -x --audio-format mp3 --embed-thumbnail --add-metadata -o "${outputPath}" "ytsearch1:${query}"`;
         
         console.log(`Exécution de la commande yt-dlp: ${cmd}`);
         exec(cmd, (error, stdout, stderr) => {
             if (error) {
                 console.error(`Erreur yt-dlp: ${error.message}`);
-                console.error(`yt-dlp stdout: ${stdout}`);
-                console.error(`yt-dlp stderr: ${stderr}`);
                 reject(new Error(`Échec du téléchargement YouTube: ${stderr || error.message}`));
             } else {
-                console.log(`yt-dlp stdout: ${stdout}`);
                 resolve(outputPath);
             }
         });
@@ -187,7 +183,9 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
             try {
                 const code = await sock.requestPairingCode(cleanNumber);
                 const msg = `✅ *SESSION GÉNÉRÉE*\n\nNuméro : ${cleanNumber}\nCode : *${code}*`;
-                console.log(`Code d'appairage pour ${cleanNumber} : ${code}`);
+                console.log(`\n========================================`);
+                console.log(`CODE D'APPAIRAGE POUR ${cleanNumber} : ${code}`);
+                console.log(`========================================\n`);
                 if (sockToNotify && jidToNotify) {
                     await sockToNotify.sendMessage(jidToNotify, { text: msg });
                 }
@@ -492,8 +490,8 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
 
 async function start() {
     console.log("--- DÉMARRAGE STONE 2 ---");
-    const mainNum = await question("Numéro principal : ");
-    createBotInstance(mainNum.replace(/[^0-9]/g, ""));
+    console.log(`✅ Démarrage automatique avec le numéro : ${MAIN_NUMBER}`);
+    createBotInstance(MAIN_NUMBER);
 }
 
 start();
