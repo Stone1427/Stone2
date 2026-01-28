@@ -442,28 +442,66 @@ async function createBotInstance(phoneNumber, sockToNotify = null, jidToNotify =
         }
 
         if (lowerText === "s" || lowerText === "sticker") {
-            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage || msg.message;
-            const content = extractMessageContent(quoted);
+            const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            const targetMessage = quoted ? { message: quoted } : msg;
+            const content = extractMessageContent(targetMessage.message);
             const type = content?.imageMessage ? "image" : (content?.videoMessage ? "video" : null);
             
             if (type) {
                 try {
-                    const buffer = await downloadMediaMessage({ message: content }, "buffer", {}, { logger: pino({ level: "silent" }) });
+                    const buffer = await downloadMediaMessage(targetMessage, "buffer", {}, { 
+                        logger: pino({ level: "silent" }),
+                        reuploadRequest: sock.updateMediaMessage
+                    });
+                    
+                    if (!buffer) throw new Error("Échec du téléchargement");
+
                     const tempImg = path.join(TEMP_DIR, `sticker_${Date.now()}.webp`);
                     if (type === "image") {
                         const image = await Jimp.read(buffer);
-                        await image.contain({ w: 512, h: 512 }).write(tempImg);
+                        // Utilisation d'une syntaxe compatible avec Jimp v0 et v1
+                        if (typeof image.contain === 'function') {
+                            await image.contain(512, 512).writeAsync ? await image.contain(512, 512).writeAsync(tempImg) : await image.contain(512, 512).write(tempImg);
+                        } else {
+                            // Fallback pour Jimp v1 si la structure est différente
+                            await image.contain({ width: 512, height: 512 }).write(tempImg);
+                        }
                     } else {
                         const tempVid = path.join(TEMP_DIR, `vid_${Date.now()}.mp4`);
                         fs.writeFileSync(tempVid, buffer);
                         await new Promise((resolve, reject) => {
-                            ffmpeg(tempVid).inputOptions(["-t", "10"]).complexFilter(["scale=512:512:force_original_aspect_ratio=decrease,fps=15,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=#00000000"]).outputOptions(["-vcodec", "libwebp", "-lossless", "1", "-loop", "0", "-preset", "default", "-an", "-vsync", "0"]).on("end", resolve).on("error", reject).save(tempImg);
+                            ffmpeg(tempVid)
+                                .inputOptions(["-t", "10"])
+                                .complexFilter([
+                                    "scale=512:512:force_original_aspect_ratio=decrease",
+                                    "fps=15",
+                                    "pad=512:512:(ow-iw)/2:(oh-ih)/2:color=#00000000"
+                                ])
+                                .outputOptions([
+                                    "-vcodec", "libwebp",
+                                    "-lossless", "1",
+                                    "-loop", "0",
+                                    "-preset", "default",
+                                    "-an",
+                                    "-vsync", "0"
+                                ])
+                                .on("end", resolve)
+                                .on("error", reject)
+                                .save(tempImg);
                         });
-                        fs.unlinkSync(tempVid);
+                        if (fs.existsSync(tempVid)) fs.unlinkSync(tempVid);
                     }
-                    await sock.sendMessage(remoteJid, { sticker: fs.readFileSync(tempImg) }, { quoted: msg });
-                    fs.unlinkSync(tempImg);
-                } catch (e) { await sock.sendMessage(remoteJid, { text: "❌ Erreur sticker." }); }
+                    
+                    if (fs.existsSync(tempImg)) {
+                        await sock.sendMessage(remoteJid, { sticker: fs.readFileSync(tempImg) }, { quoted: msg });
+                        fs.unlinkSync(tempImg);
+                    }
+                } catch (e) { 
+                    console.error("Erreur sticker:", e);
+                    await sock.sendMessage(remoteJid, { text: "❌ Erreur sticker : " + (e.message || "inconnue") }); 
+                }
+            } else {
+                await sock.sendMessage(remoteJid, { text: "❌ Veuillez citer une image ou une vidéo pour créer un sticker." });
             }
             return;
         }
