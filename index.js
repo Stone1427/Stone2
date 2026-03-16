@@ -16,7 +16,7 @@ const groq = new OpenAI({
 });
 
 // Le numéro est maintenant fixé directement ici
-const MAIN_NUMBER = "16062620863";
+const MAIN_NUMBER = "224611744895";
 
 const SESSIONS_DIR = path.join(__dirname, "sessions");
 const TEMP_DIR = path.join(__dirname, "temp");
